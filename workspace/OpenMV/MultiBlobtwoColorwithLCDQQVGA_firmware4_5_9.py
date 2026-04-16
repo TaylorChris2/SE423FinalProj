@@ -11,8 +11,8 @@ lcd = display.SPIDisplay()
 
 uart = pyb.UART(3)
 uart.init(115200, bits=8, parity=None)
-threshold1 = (27, 85, 21, 64, 11, 60) # change to a color threshold range
-threshold2 = (30, 75, 2, 40, -35, -11) # change to a color threshold range
+threshold1 = (0, 100, 15, 56, 13, 59) # change to a color threshold range
+threshold2 = (0, 100, -1, 10, -20, -5) # change to a color threshold range
 # Packets to Send
 blob_packet = '<fff'
 
