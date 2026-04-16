@@ -170,7 +170,7 @@ int16_t RobotState = 1;
 int16_t checkfronttally = 0;
 int32_t WallFollowtime = 0;
 
-#define NUMWAYPOINTS 10
+#define NUMWAYPOINTS 8
 uint16_t statePos = 0;
 pose robotdest[NUMWAYPOINTS];  // array of waypoints for the robot
 uint16_t i = 0;//for loop
@@ -275,8 +275,6 @@ int16_t DAN28027Garbage = 0;
 int16_t dan28027adc1 = 0;
 int16_t dan28027adc2 = 0;
 uint16_t MPU9250ignoreCNT = 0;  //This is ignoring the first few interrupts if ADCC_ISR and start sending to IMU after these first few interrupts.
-
-float RCangle;
 
 void main(void)
 {
@@ -468,8 +466,6 @@ void main(void)
     robotdest[5].x = 4;     robotdest[5].y = 2;
     robotdest[6].x = 4;     robotdest[6].y = 10;
     robotdest[7].x = 0;     robotdest[7].y = 9;
-    robotdest[8].x = 4;     robotdest[8].y = 5;
-    robotdest[9].x = 2;     robotdest[9].y = 8;
 
     // ROBOTps will be updated by Optitrack during gyro calibration
     // TODO: specify the starting position of the robot
@@ -594,7 +590,7 @@ void main(void)
     while(1)
     {
         if (UARTPrint == 1 ) {
-/*
+
             if (readbuttons() == 0) {
                 UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);				
 //                UART_printfLine(1,"x:%.2f:y:%.2f:a%.2f",ROBOTps.x,ROBOTps.y,ROBOTps.theta);
@@ -629,8 +625,7 @@ void main(void)
             } else if (readbuttons() == 7) {
                 UART_printfLine(1,"%.0f,%.1f,%.1f,%.1f",tagid,tagx,tagy,tagz);
                 UART_printfLine(2,"%.1f,%.1f,%.1f",tagthetax,tagthetay,tagthetaz);
-            }*/
-            UART_printfLine(1, "RCangle %.1f ",RCangle);
+            }
 
             UARTPrint = 0;
         }
@@ -742,9 +737,6 @@ __interrupt void cpu_timer2_isr(void)
     //GpioDataRegs.GPATOGGLE.bit.GPIO31 = 1;
 
     CpuTimer2.InterruptCount++;
-
-    PostSWI3();
-
 
     //  if ((CpuTimer2.InterruptCount % 10) == 0) {
     //      UARTPrint = 1;
@@ -1223,13 +1215,6 @@ __interrupt void SWI3_LowestPriority(void)     // FLASH_CORRECTABLE_ERROR
 
     //###############################################################################################
     // Insert SWI ISR Code here.......
-
-    RCangle = readEncWheel();
-    setEPWM3A_RCServo(RCangle); //RCangle is a value from -90 to 90
-    setEPWM3B_RCServo(RCangle); //RCangle is a value from -90 to 90
-    setEPWM5A_RCServo(RCangle); //RCangle is a value from -90 to 90
-    setEPWM5B_RCServo(RCangle); //RCangle is a value from -90 to 90
-    setEPWM6A_RCServo(RCangle); //RCangle is a value from -90 to 90
 
     //###############################################################################################
     //
