@@ -157,6 +157,13 @@ float NextNextLargestAreaThreshold2 = 0;
 float NextNextLargestColThreshold2 = 0;
 float NextNextLargestRowThreshold2 = 0;
 
+float odist = 0.0;
+float gdist = 0.0;
+
+float kpvision = 0.0;
+uint32_t count22 = 0;
+uint32_t count1 = 0;
+
 uint32_t numThres1 = 0;
 uint32_t numThres2 = 0;
 
@@ -169,6 +176,9 @@ uint32_t timecount = 0;
 int16_t RobotState = 1;
 int16_t checkfronttally = 0;
 int32_t WallFollowtime = 0;
+
+
+float colcentroid = 0.0;
 
 #define NUMWAYPOINTS 10
 uint16_t statePos = 0;
@@ -594,9 +604,11 @@ void main(void)
     while(1)
     {
         if (UARTPrint == 1 ) {
-/*
+
             if (readbuttons() == 0) {
-                UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);				
+                UART_printfLine(1,"State:%d : %d",RobotState,statePos);
+                UART_printfLine(2, "O %.3f G %.3f",odist, gdist);
+                //UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);
 //                UART_printfLine(1,"x:%.2f:y:%.2f:a%.2f",ROBOTps.x,ROBOTps.y,ROBOTps.theta);
                 UART_printfLine(2,"F%.4f R%.4f",LADARfront,LADARrightfront);
             } else if (readbuttons() == 1) {
@@ -629,8 +641,8 @@ void main(void)
             } else if (readbuttons() == 7) {
                 UART_printfLine(1,"%.0f,%.1f,%.1f,%.1f",tagid,tagx,tagy,tagz);
                 UART_printfLine(2,"%.1f,%.1f,%.1f",tagthetax,tagthetay,tagthetaz);
-            }*/
-            UART_printfLine(1, "RCangle %.1f ",RCangle);
+            }
+            //UART_printfLine(1, "RCangle %.1f ",RCangle);
 
             UARTPrint = 0;
         }
@@ -895,10 +907,16 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             NextNextLargestColThreshold1 = fromCAMvaluesThreshold1[7];
             NextNextLargestRowThreshold1 = fromCAMvaluesThreshold1[8];
 			numThres1++;
+			float mr = MaxRowThreshold1;
+
+			odist = -1.15291070692441e-05*pow(mr,3)+0.00348114123702629*pow(mr,2)-0.365334496447587*pow(mr,1)+13.7577551982332+0.75;
             if ((numThres1 % 5) == 0) {
                 // LED4 is GPIO97
                 GpioDataRegs.GPDTOGGLE.bit.GPIO97 = 1;
-            }			
+            }
+			if ((numThres1 % 100) == 0) {
+			    UARTPrint = 1;
+			}
         }
 
         if (NewCAMDataThreshold2 == 1) {
@@ -915,10 +933,17 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             NextNextLargestColThreshold2 = fromCAMvaluesThreshold2[7];
             NextNextLargestRowThreshold2 = fromCAMvaluesThreshold2[8];
 			numThres2++;
+            float mr = MaxRowThreshold2;
+
+            gdist = -1.15291070692441e-05*pow(mr,3)+0.00348114123702629*pow(mr,2)-0.365334496447587*pow(mr,1)+13.7577551982332+0.75;
+
 			if ((numThres2 % 5) == 0) {
                 // LED5 is GPIO111
                 GpioDataRegs.GPDTOGGLE.bit.GPIO111 = 1;
-            }			
+			}
+            if ((numThres2 % 100) == 0) {
+                UARTPrint = 1;
+            }
         }
 		
         if (NewCAMDataAprilTag1 == 1) {
@@ -1012,6 +1037,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             statePos = (statePos+1)%NUMWAYPOINTS;
         }
         // state machine
+        //RobotState = 20;
         switch (RobotState) {
         case 1:
 
@@ -1029,6 +1055,14 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 checkfronttally = 0;
             }
 
+            count1 += 1;
+            if (count1 > 2000) {
+                if (MaxAreaThreshold1 > 35 & (MaxAreaThreshold1 > MaxAreaThreshold2)) {
+                    RobotState=20;
+                } else if (MaxAreaThreshold2 > 35 & (MaxAreaThreshold2 > MaxAreaThreshold1)) {
+                    RobotState=30;
+                }
+            }
             break;
         case 10:
             if (right_wall_follow_state == 1) {
@@ -1062,6 +1096,95 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
         case 20:
             // put vision code here
+            kpvision = -0.05;
+            colcentroid = MaxColThreshold1 - 80;
+            if (MaxColThreshold1 == 0 || MaxAreaThreshold1 < 3) {
+                vref = 0;
+                turn = 0;
+            } else {
+                vref = 0.75;
+                turn = kpvision*(0-colcentroid);
+            }
+
+            if (MaxRowThreshold1 > 115) {
+                RobotState = 22;
+                count22 = 0;
+            }
+            break;
+        case 22:
+            vref = 0;
+            turn = 0;
+            count22 += 1;
+            if (count22 > 1000) {
+                RobotState = 24;
+                count22 = 0;
+            }
+            break;
+        case 24:
+            vref = 0.5;
+            turn = 0;
+            count22 += 1;
+            if (count22 > 1000) {
+                RobotState = 26;
+                count22 = 0;
+            }
+            break;
+        case 26:
+            vref = 0;
+            turn = 0;
+            count22 += 1;
+            if (count22 > 1000) {
+                RobotState = 1;
+                count22 = 0;
+                count1 = 0;
+            }
+            break;
+
+
+        case 30:
+            // put vision code here
+            kpvision = -0.05;
+            colcentroid = MaxColThreshold2 - 80;
+            if (MaxColThreshold2 == 0 || MaxAreaThreshold2 < 3) {
+                vref = 0;
+                turn = 0;
+            } else {
+                vref = 0.75;
+                turn = kpvision*(0-colcentroid);
+            }
+
+            if (MaxRowThreshold2 > 100) {
+                RobotState = 32;
+                count22 = 0;
+            }
+            break;
+        case 32:
+            vref = 0;
+            turn = 0;
+            count22 += 1;
+            if (count22 > 1000) {
+                RobotState = 34;
+                count22 = 0;
+            }
+            break;
+        case 34:
+            vref = 0.5;
+            turn = 0;
+            count22 += 1;
+            if (count22 > 1000) {
+                RobotState = 36;
+                count22 = 0;
+            }
+            break;
+        case 36:
+            vref = 0;
+            turn = 0;
+            count22 += 1;
+            if (count22 > 1000) {
+                RobotState = 1;
+                count22 = 0;
+                count1 = 0;
+            }
             break;
         default:
             break;
