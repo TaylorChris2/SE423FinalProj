@@ -157,12 +157,19 @@ float NextNextLargestAreaThreshold2 = 0;
 float NextNextLargestColThreshold2 = 0;
 float NextNextLargestRowThreshold2 = 0;
 
+// cjca Global variables to hold camera depth for orange and green objects
 float odist = 0.0;
 float gdist = 0.0;
 
+// cjca Global error variable for P controller to track colored objects
+float colcentroid = 0.0;
+
+// cjca P colored object tracking controller gain 
 float kpvision = 0.0;
-uint32_t count22 = 0;
-uint32_t count1 = 0;
+
+// cjca Global timer variables
+uint32_t count22 = 0; // cjca Timing between states to pick up golf balls
+uint32_t count1 = 0; // cjca Delay when resetting back to state 1
 
 uint32_t numThres1 = 0;
 uint32_t numThres2 = 0;
@@ -176,9 +183,6 @@ uint32_t timecount = 0;
 int16_t RobotState = 1;
 int16_t checkfronttally = 0;
 int32_t WallFollowtime = 0;
-
-
-float colcentroid = 0.0;
 
 #define NUMWAYPOINTS 10
 uint16_t statePos = 0;
@@ -908,8 +912,9 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             NextNextLargestColThreshold1 = fromCAMvaluesThreshold1[7];
             NextNextLargestRowThreshold1 = fromCAMvaluesThreshold1[8];
 			numThres1++;
-			float mr = MaxRowThreshold1;
-
+			
+            // cjca Fit a third order polynomial in matlab to convert from (orange) row threshold values to depth from the camera (in)
+            float mr = MaxRowThreshold1;
 			odist = -1.15291070692441e-05*pow(mr,3)+0.00348114123702629*pow(mr,2)-0.365334496447587*pow(mr,1)+13.7577551982332+0.75;
             if ((numThres1 % 5) == 0) {
                 // LED4 is GPIO97
@@ -934,8 +939,9 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             NextNextLargestColThreshold2 = fromCAMvaluesThreshold2[7];
             NextNextLargestRowThreshold2 = fromCAMvaluesThreshold2[8];
 			numThres2++;
+            
+            // cjca Apply the same polynomial fit to green objects
             float mr = MaxRowThreshold2;
-
             gdist = -1.15291070692441e-05*pow(mr,3)+0.00348114123702629*pow(mr,2)-0.365334496447587*pow(mr,1)+13.7577551982332+0.75;
 
 			if ((numThres2 % 5) == 0) {
@@ -1101,42 +1107,44 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             // put vision code here
             //cjca orange ball detected
             kpvision = -0.05;
-            colcentroid = MaxColThreshold1 - 80;
+            colcentroid = MaxColThreshold1 - 80; // cjca Change threshold range from 0 to 160 to -80 to 80
+            // cjca Wait for object to reappear in camera if lost
             if (MaxColThreshold1 == 0 || MaxAreaThreshold1 < 3) {
                 vref = 0;
                 turn = 0;
             } else {
+                // cjca follow ball at constant speed and turn defined by P controller to keep ball centered in camera
                 vref = 0.75;
                 turn = kpvision*(0-colcentroid);
             }
 
             if (MaxRowThreshold1 > 115) {
-                RobotState = 22;
+                RobotState = 22; // cjca Always transition to 22 from 20
                 count22 = 0;
             }
             break;
         case 22:
-            //cjca stop to let gripper door open
-
+            //cjca stop to let gripper door open and wait one second
             vref = 0;
             turn = 0;
             count22 += 1;
             if (count22 > 1000) {
-                RobotState = 24;
+                RobotState = 24; // cjca Always transition to 24 from 22
                 count22 = 0;
             }
             break;
         case 24:
-            //cjca increment in states to pick up ball smoother
+            //cjca Approach the ball slowly for one second to pick it up
             vref = 0.5;
             turn = 0;
             count22 += 1;
             if (count22 > 1000) {
-                RobotState = 26;
+                RobotState = 26; // cjca Always transition to 26 from 24
                 count22 = 0;
             }
             break;
         case 26:
+            // cjca Stop with the collected for one second ball before going back to waypoint following
             vref = 0;
             turn = 0;
             count22 += 1;
