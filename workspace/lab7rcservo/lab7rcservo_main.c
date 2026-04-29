@@ -478,6 +478,7 @@ void main(void)
     robotdest[5].x = 4;     robotdest[5].y = 2;
     robotdest[6].x = 4;     robotdest[6].y = 10;
     robotdest[7].x = 0;     robotdest[7].y = 9;
+    //cjca added two points
     robotdest[8].x = 4;     robotdest[8].y = 5;
     robotdest[9].x = 2;     robotdest[9].y = 8;
 
@@ -1054,11 +1055,13 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             } else {
                 checkfronttally = 0;
             }
-
+            //cjca cause a 2 second delay when resetting
             count1 += 1;
             if (count1 > 2000) {
+                //cjca decide which colorded ball is closer
                 if (MaxAreaThreshold1 > 35 & (MaxAreaThreshold1 > MaxAreaThreshold2)) {
                     RobotState=20;
+                //cjca also checks threshold of other ball as well
                 } else if (MaxAreaThreshold2 > 35 & (MaxAreaThreshold2 > MaxAreaThreshold1)) {
                     RobotState=30;
                 }
@@ -1096,6 +1099,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
         case 20:
             // put vision code here
+            //cjca orange ball detected
             kpvision = -0.05;
             colcentroid = MaxColThreshold1 - 80;
             if (MaxColThreshold1 == 0 || MaxAreaThreshold1 < 3) {
@@ -1112,6 +1116,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             }
             break;
         case 22:
+            //cjca stop to let gripper door open
+
             vref = 0;
             turn = 0;
             count22 += 1;
@@ -1121,6 +1127,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             }
             break;
         case 24:
+            //cjca increment in states to pick up ball smoother
             vref = 0.5;
             turn = 0;
             count22 += 1;
@@ -1138,11 +1145,13 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 count22 = 0;
                 count1 = 0;
             }
+            //cjca continue to x,y point
             break;
 
 
         case 30:
             // put vision code here
+            //cjca do the same but for the green ball now
             kpvision = -0.05;
             colcentroid = MaxColThreshold2 - 80;
             if (MaxColThreshold2 == 0 || MaxAreaThreshold2 < 3) {
@@ -1158,6 +1167,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 count22 = 0;
             }
             break;
+        ////cjca delay by a second each time to run smoother
         case 32:
             vref = 0;
             turn = 0;
@@ -1167,6 +1177,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 count22 = 0;
             }
             break;
+        //cjca uses the same count variable for convenience
         case 34:
             vref = 0.5;
             turn = 0;
@@ -1183,6 +1194,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             if (count22 > 1000) {
                 RobotState = 1;
                 count22 = 0;
+                //cjca reset the count variable for 2 second delay
                 count1 = 0;
             }
             break;
@@ -1346,7 +1358,7 @@ __interrupt void SWI3_LowestPriority(void)     // FLASH_CORRECTABLE_ERROR
 
     //###############################################################################################
     // Insert SWI ISR Code here.......
-
+    //cjca enable the ewpm's for servo's
     RCangle = readEncWheel();
     setEPWM3A_RCServo(RCangle); //RCangle is a value from -90 to 90
     setEPWM3B_RCServo(RCangle); //RCangle is a value from -90 to 90
