@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/mpc.dir/link.d CMakeFiles/mpc.dir/src/main.cpp.o CMakeFiles/mpc.dir/src/dynamics.cpp.o -o mpc  -Wl,-rpath,/home/jwest33/repos/SE423FinalProj/workspace/mpc-test/cpp/casadi/build/lib:/usr/local/lib /usr/local/lib/libcasadi.so

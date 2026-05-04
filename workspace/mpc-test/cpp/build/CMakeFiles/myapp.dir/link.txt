@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/myapp.dir/link.d CMakeFiles/myapp.dir/src/main.cpp.o -o myapp  -Wl,-rpath,/home/jwest33/repos/SE423FinalProj/workspace/mpc-test/cpp/casadi/build/lib:/usr/local/lib /usr/local/lib/libcasadi.so
