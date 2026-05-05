@@ -101,6 +101,17 @@ def reconstruct_path(row_end, col_end, node_track):
         curr = node_track[curr]['parent']
     return path  # reverse order: goal -> start, matches original C behavior
 
+
+roomNum = 0
+def path_Astar(roomNum):
+    waypoints = []
+    row_end = roomNum / 10
+    col_end = roomNum / 10
+    waypoints = astar(0, 0, row_end, col_end)
+    #return waypoints as 
+    return waypoints.reverse()
+
+
 def print_map(rows, cols):
     for r in range(rows):
         print(' '.join(map_grid[r * cols:(r + 1) * cols]))
