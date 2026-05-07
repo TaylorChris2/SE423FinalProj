@@ -153,6 +153,9 @@ class MPC:
         # Obstacle inflation radius and cost weight
         self.safe_radius = 0.1
         self.obst_alpha = 1e-3
+        self.max_obsts = 10
+        self.lidar_deg_res = 1.05
+        self.lidar_zero_idx = 113
 
         self.lidar_shm = ShmRegion(lidar_shm_name, LIDAR_DTYPE, create=False)
         self.lidar_sem = NamedSemaphore(lidar_sem_name)
@@ -220,7 +223,7 @@ class MPC:
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
-        self.obst_num = 0
+        self.obst_num = N_BEAMS
         self.obst_pos = self.opti.parameter(2, self.obst_num)
 
         if self.obst_num > 0:
@@ -254,12 +257,18 @@ class MPC:
     def update_obstacles(self):
         
         try:
-            scan = self.lidar_q.get(timeout=0.1)
-            print(scan[-1])
+            scan = self.lidar_q.get(timeout=0.1) / 1000 * 3.28084 #ft
+            close_scan = [x for x in scan if x < 1]
+            # max_scan = np.partition(close_scan, -self.max_obsts)[-self.max_obsts:]
+            
+            close_scan_xy = np.zeros((2,N_BEAMS))
+            for x in range(0,len(close_scan)):
+                theta = np.deg2rad(self.lidar_deg_res * (x - self.lidar_zero_idx))
+                close_scan_xy[0,x] = close_scan[x] * np.cos(theta)
+                close_scan_xy[1,x] = close_scan[x] * np.sin(theta)
+            self.opti.set_value(self.obst_pos, close_scan_xy.T)
         except queue.Empty:
             pass
-
-
 
     def update_robot_pose(self):
         pass
@@ -285,7 +294,6 @@ x_total = [x_next]
 u_total = [np.array([0,0])]
 
 start = time.time()
-print(x_d[:,-1][0:2])
 
 mpc.start_threads()
 
