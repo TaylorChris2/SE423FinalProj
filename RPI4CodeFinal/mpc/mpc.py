@@ -223,22 +223,20 @@ class MPC:
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
-        self.obst_num = N_BEAMS
-        self.obst_pos = self.opti.parameter(2, self.obst_num)
+        self.obst_pos = self.opti.parameter(2, self.max_obsts)
 
-        if self.obst_num > 0:
-            for k in range(self.N + 1):
-                # Robot position at timestep k: (2 x 1)
-                pos_k = self.X[:2, k]  # shape (2,)
-                # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
-                diff = self.obst_pos - ca.repmat(pos_k, 1, self.obst_num)
-                # Squared distances: (1 x obst_num)
-                dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
-                # Vectorized margin
-                dist = ca.sqrt(dist_sq)
+        for k in range(self.N + 1):
+            # Robot position at timestep k: (2 x 1)
+            pos_k = self.X[:2, k]  # shape (2,)
+            # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
+            diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
+            # Squared distances: (1 x obst_num)
+            dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
+            # Vectorized margin
+            dist = ca.sqrt(dist_sq)
             
-                margin = ca.fmax(dist - self.safe_radius, 1e-4)
-                self.cost += ca.sum2(self.obst_alpha / margin**2)
+            margin = ca.fmax(dist - self.safe_radius, 1e-4)
+            self.cost += ca.sum2(self.obst_alpha / margin**2)
 
         self.opti.minimize(self.cost)
 
@@ -257,16 +255,28 @@ class MPC:
     def update_obstacles(self):
         
         try:
-            scan = self.lidar_q.get(timeout=0.1) / 1000 * 3.28084 #ft
-            close_scan = [x for x in scan if x < 1]
-            # max_scan = np.partition(close_scan, -self.max_obsts)[-self.max_obsts:]
+            scan = self.lidar_q.get(timeout=0.1)
+
+            close_scan = np.asarray([x for x in scan if x < 200000])
+
+            if len(close_scan) == 0:
+                return
+
+            k = min(self.max_obsts, len(close_scan))
+
+            idx = np.argpartition(np.abs(close_scan), k - 1)[:k]
+            print(idx)
+            min_scan = close_scan[idx]
+
+            min_scan_xy = np.zeros((2, self.max_obsts))
+
+            for i in range(k):
+                theta = np.deg2rad(self.lidar_deg_res * (idx[i] - self.lidar_zero_idx))
+                min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
+                min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
+
+            self.opti.set_value(self.obst_pos, min_scan_xy)
             
-            close_scan_xy = np.zeros((2,N_BEAMS))
-            for x in range(0,len(close_scan)):
-                theta = np.deg2rad(self.lidar_deg_res * (x - self.lidar_zero_idx))
-                close_scan_xy[0,x] = close_scan[x] * np.cos(theta)
-                close_scan_xy[1,x] = close_scan[x] * np.sin(theta)
-            self.opti.set_value(self.obst_pos, close_scan_xy.T)
         except queue.Empty:
             pass
 
