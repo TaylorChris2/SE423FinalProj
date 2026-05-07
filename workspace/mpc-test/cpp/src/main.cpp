@@ -9,13 +9,13 @@ int main(){
   // Params
   const int NX = 3;
   const int NU = 2;
-  const int N = 30;
-  double dt = 0.5;
+  const int N = 20;
+  double dt = 0.25;
   double r = 0.05;
   double v_l_max = 0.1, v_r_max = 0.1;
-  int obst_num = 4;
+  int obst_num = 199;
   double safe_radius = 0.1;
-  double weight = 50.0;
+  double weight = 100.0;
 
   Opti opti;
 
@@ -47,21 +47,18 @@ int main(){
     cost += mtimes(mtimes(uk.T(), R), uk);
   }
 
-  // terminal cost: placeholder P = Q (replace with DARE result if available)
-  MX errT = X(Slice(),N) - xd(Slice(),N);
-  MX P = DM::diag(DM{1000.0,1000.0,10.0});
-//   cost += mtimes(mtimes(errT.T(), P), errT);
-
   // obstacle cost (vectorized)
   MX obst_cost = MX::zeros(1,1);
   for(int k=0;k<=N;k++){
     MX pos_k = X(Slice(0,2), k);            // 2x1
     MX pos_k_rep = repmat(pos_k, 1, obst_num); // 2 x obst_num
     MX diff = obst_pos - pos_k_rep;         // 2 x obst_num
-    MX dist_sq = sum1(diff*diff);           // 1 x obst_num
-    MX dist = sqrt(dist_sq);
-    MX margin = fmax(dist - safe_radius, 1e-4);
-    obst_cost += sum2(exp(1.0/(weight*margin)) - 1);
+    MX dist = sqrt(sum1(pow(diff,2)));           // 1 x obst_num
+    MX min_margin = MX(1e-3);  
+    MX margin = fmax(dist - safe_radius, min_margin); // 1 x obst\_num  
+
+    MX penalty = 1e-2 / pow(margin, 2);       // elementwise  
+    obst_cost += sum2(penalty);
   }
   cost += obst_cost;
 
@@ -69,10 +66,12 @@ int main(){
 
   Dict opts;
   opts["ipopt.max_iter"] = 1e3;
-  opts["ipopt.tol"] = 1e-4;
-  opts["ipopt.print_level"] = 5;
-//   std::cout >> print_options() >> std::endl;
+  opts["ipopt.tol"] = 1e-3;
+  opts["ipopt.print_level"] = 0;
   opts["ipopt.linear_solver"] = "mumps";
+  opts["ipopt.mu_strategy"] = "adaptive";
+  opts["ipopt.warm_start_init_point"] = "yes";
+  opts["ipopt.warm_start_mult_bound_push"] = 1e-6;
   opti.solver("ipopt", opts);
 
   // create reference xd (constant)
@@ -89,7 +88,7 @@ int main(){
 
   // obstacles
   DM obst_mat = DM::zeros(2, obst_num);
-  for(int i=0;i<obst_num;i++){ obst_mat(0,i)=0.0; obst_mat(1,i)=0.5; }
+  for(int i=0;i<obst_num;i++){ obst_mat(0,i)=0.4; obst_mat(1,i)=0.1; }
   std::vector<double> obsx = {0.4,0.6,0.82,1.15};
   std::vector<double> obsy = {0.1,0.4,0.29,0.4};
   for(int i=0;i<4;i++){ obst_mat(0,i)=obsx[i]; obst_mat(1,i)=obsy[i]; }
@@ -142,6 +141,7 @@ int main(){
     x_next = rk4_np(x_next, U0);
 
     std::cout << "iter " << iter_count << " x_next: " << x_next[0] << " " << x_next[1] << " " << x_next[2] << "\n";
+    // std::cout << opti.debug() << "\n";
 
     iter_count++;
   }
