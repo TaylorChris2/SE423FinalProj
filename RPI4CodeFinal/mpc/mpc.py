@@ -8,12 +8,12 @@ import queue
 from ctypes import *
 from typing import Optional
 from multiprocessing import shared_memory
-from RPI4CodeFinal.mpc.dynamics import EOM_kin_ca
+from dynamics import EOM_kin_ca
 
 import posix_ipc
 
-SEM_MUTEX_NAME = "/sem-new-ladar-dist"
-SHARED_MEM_NAME = "/posix-shared-mem-ladar-dist"
+SEM_MUTEX_NAME = "sem-new-ladar-dist"
+SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
 
 N_BEAMS = 228
 ODOM_DTYPE = np.dtype([
@@ -22,9 +22,114 @@ ODOM_DTYPE = np.dtype([
     ('theta',     '<f8'),   # 8  → 40 bytes
 ])
 LIDAR_DTYPE = np.dtype([
-    ('points',         '<f4', (N_BEAMS, 2)),  # 1824 → 1856 bytes total
+    ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
 ])
 
+class ShmRegion:
+    """A POSIX shared-memory region viewed as a numpy structured scalar."""
+    def __init__(self, name: str, dtype: np.dtype, create: bool = False):
+        self.name = name
+        size = dtype.itemsize
+        if create:
+            try:
+                old = shared_memory.SharedMemory(name=name, create=False)
+                old.close(); old.unlink()
+            except FileNotFoundError:
+                pass
+            self.shm = shared_memory.SharedMemory(name=name, create=True, size=size)
+        else:
+            self.shm = shared_memory.SharedMemory(name=name, create=False)
+        self.array = np.ndarray((1,), dtype=dtype, buffer=self.shm.buf)
+    def close(self):
+        try: self.shm.close()
+        except Exception: pass
+    def unlink(self):
+        try: self.shm.unlink()
+        except Exception: pass
+
+class NamedSemaphore:
+    """A POSIX named semaphore. Same name across producer and consumer."""
+    def __init__(self, name: str, create: bool = False, initial: int = 0):
+        self.name = name
+        if create:
+            try:
+                posix_ipc.unlink_semaphore(name)
+            except posix_ipc.ExistentialError:
+                pass
+            self.sem = posix_ipc.Semaphore(
+                name, flags=posix_ipc.O_CREAT | posix_ipc.O_EXCL,
+                initial_value=initial)
+        else:
+            self.sem = posix_ipc.Semaphore(name)
+    
+    def acquire(self, timeout: Optional[float] = None) -> bool:
+        try:
+            self.sem.acquire(timeout)
+            return True
+        except posix_ipc.BusyError:
+            return False
+    
+    def acquire_latest(self, timeout: Optional[float] = None) -> bool:
+        """
+        Wait for at least one post,
+        then drain all remaining semaphore counts by getting one.
+        """
+        # Wait until at least one update exists
+        try:
+            self.sem.acquire(timeout)
+        except posix_ipc.BusyError:
+            return False
+
+        # Drain any backlog
+        while True:
+            try:
+                self.sem.acquire(0)
+            except posix_ipc.BusyError:
+                break
+
+        return True
+
+    def release(self):
+        self.sem.release()
+    def release(self):
+        self.sem.release()
+    def close(self):
+        try: self.sem.close()
+        except Exception: pass
+    def unlink(self):
+        try: posix_ipc.unlink_semaphore(self.name)
+        except posix_ipc.ExistentialError: pass
+
+class LidarReader(threading.Thread):
+    """Drains the lidar semaphore, pushes copies of scans onto a queue."""
+    def __init__(self, shm: ShmRegion, sem: NamedSemaphore, q: queue.LifoQueue):
+        super().__init__(daemon=True, name="LidarReader")
+        self.shm = shm
+        self.sem = sem
+        self.q = q
+        self.last_seq = -1
+        self.received = 0
+        self.dropped = 0
+        self._stop = threading.Event()
+    def stop(self): self._stop.set()
+    def run(self):
+        view = self.shm.array
+        while not self._stop.is_set():
+            if not self.sem.acquire(timeout=0.2):
+                continue
+            n     = N_BEAMS
+            pts   = np.array(view['points'][0, :n], dtype=np.float32, copy=True)
+            self.received += 1
+            try:
+                self.q.put_nowait(pts)
+            except queue.Full:
+                try: self.q.get_nowait()
+                except queue.Empty: pass
+                try: self.q.put_nowait(pts)
+                except queue.Full: pass
+                self.dropped += 1
+        
+        
 class MPC:
 
     def __init__(self, lidar_shm_name: str, lidar_sem_name: str,):
@@ -56,11 +161,11 @@ class MPC:
         self.lidar_reader = LidarReader(self.lidar_shm, self.lidar_sem, self.lidar_q)
         self._stop = threading.Event()
 
-        so_file = "/home/jwest33/repos/SE423FinalProj/workspace/mpc/plot_sem.so"
-        self.fcn = CDLL(so_file)
-        self.fcn.my_sem_open()
+        #so_file = "/home/jwest33/repos/SE423FinalProj/workspace/mpc/plot_sem.so"
+        #self.fcn = CDLL(so_file)
+        #self.fcn.my_sem_open()
 
-        self.shm_dist = [0]*228
+        #self.shm_dist = [0]*228
 
         self.mpc_setup_problem()
 
@@ -115,20 +220,22 @@ class MPC:
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
+        self.obst_num = 0
         self.obst_pos = self.opti.parameter(2, self.obst_num)
 
-        for k in range(self.N + 1):
-            # Robot position at timestep k: (2 x 1)
-            pos_k = self.X[:2, k]  # shape (2,)
-            # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
-            diff = self.obst_pos - ca.repmat(pos_k, 1, self.obst_num)
-            # Squared distances: (1 x obst_num)
-            dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
-            # Vectorized margin
-            dist = ca.sqrt(dist_sq)
+        if self.obst_num > 0:
+            for k in range(self.N + 1):
+                # Robot position at timestep k: (2 x 1)
+                pos_k = self.X[:2, k]  # shape (2,)
+                # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
+                diff = self.obst_pos - ca.repmat(pos_k, 1, self.obst_num)
+                # Squared distances: (1 x obst_num)
+                dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
+                # Vectorized margin
+                dist = ca.sqrt(dist_sq)
             
-            margin = ca.fmax(dist - self.safe_radius, 1e-4)
-            self.cost += ca.sum2(self.obst_alpha / margin**2)
+                margin = ca.fmax(dist - self.safe_radius, 1e-4)
+                self.cost += ca.sum2(self.obst_alpha / margin**2)
 
         self.opti.minimize(self.cost)
 
@@ -148,6 +255,7 @@ class MPC:
         
         try:
             scan = self.lidar_q.get(timeout=0.1)
+            print(scan[-1])
         except queue.Empty:
             pass
 
@@ -162,85 +270,6 @@ class MPC:
     def solve_mpc(self):
         pass
 
-class LidarReader(threading.Thread):
-    """Drains the lidar semaphore, pushes copies of scans onto a queue."""
-    def __init__(self, shm: ShmRegion, sem: NamedSemaphore, q: queue.LifoQueue):
-        super().__init__(daemon=True, name="LidarReader")
-        self.shm = shm
-        self.sem = sem
-        self.q = q
-        self.last_seq = -1
-        self.received = 0
-        self.dropped = 0
-        self._stop = threading.Event()
-    def stop(self): self._stop.set()
-    def run(self):
-        view = self.shm.array
-        while not self._stop.is_set():
-            if not self.sem.acquire(timeout=0.2):
-                continue
-            n     = N_BEAMS
-            pts   = np.array(view['points'][0, :n], dtype=np.float32, copy=True)
-            self.received += 1
-            try:
-                self.q.put_nowait(pts)
-            except queue.Full:
-                try: self.q.get_nowait()
-                except queue.Empty: pass
-                try: self.q.put_nowait(pts)
-                except queue.Full: pass
-                self.dropped += 1
-
-class ShmRegion:
-    """A POSIX shared-memory region viewed as a numpy structured scalar."""
-    def __init__(self, name: str, dtype: np.dtype, create: bool = False):
-        self.name = name
-        size = dtype.itemsize
-        if create:
-            try:
-                old = shared_memory.SharedMemory(name=name, create=False)
-                old.close(); old.unlink()
-            except FileNotFoundError:
-                pass
-            self.shm = shared_memory.SharedMemory(name=name, create=True, size=size)
-        else:
-            self.shm = shared_memory.SharedMemory(name=name, create=False)
-        self.array = np.ndarray((1,), dtype=dtype, buffer=self.shm.buf)
-    def close(self):
-        try: self.shm.close()
-        except Exception: pass
-    def unlink(self):
-        try: self.shm.unlink()
-        except Exception: pass
-
-class NamedSemaphore:
-    """A POSIX named semaphore. Same name across producer and consumer."""
-    def __init__(self, name: str, create: bool = False, initial: int = 0):
-        self.name = name
-        if create:
-            try:
-                posix_ipc.unlink_semaphore(name)
-            except posix_ipc.ExistentialError:
-                pass
-            self.sem = posix_ipc.Semaphore(
-                name, flags=posix_ipc.O_CREAT | posix_ipc.O_EXCL,
-                initial_value=initial)
-        else:
-            self.sem = posix_ipc.Semaphore(name)
-    def acquire(self, timeout: Optional[float] = None) -> bool:
-        try:
-            self.sem.acquire(timeout)
-            return True
-        except posix_ipc.BusyError:
-            return False
-    def release(self):
-        self.sem.release()
-    def close(self):
-        try: self.sem.close()
-        except Exception: pass
-    def unlink(self):
-        try: posix_ipc.unlink_semaphore(self.name)
-        except posix_ipc.ExistentialError: pass
 
 x_next = np.array([0, 0, 0])
 x_d = np.array([1, 0.5, np.pi/4])
@@ -262,7 +291,10 @@ mpc.start_threads()
 
 while np.linalg.norm(x_next[0:2] - x_d[:,-1][0:2]) > 3e-2 and iter_count <= 1e2:
 
-    print(iter_count)
+
+    mpc.update_obstacles()
+    time.sleep(0.01)
+    '''print(iter_count)
 
     if first_iter:
         # Set initial state and reference
@@ -296,4 +328,4 @@ while np.linalg.norm(x_next[0:2] - x_d[:,-1][0:2]) > 3e-2 and iter_count <= 1e2:
     
     print(np.linalg.norm(x_next[0:2] - x_d[:,-1][0:2]))
     x_total.append(x_next)
-    u_total.append(U_opt[:, 0])
+    u_total.append(U_opt[:, 0])'''
