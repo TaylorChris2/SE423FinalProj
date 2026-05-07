@@ -7,6 +7,7 @@ import queue
 
 from ctypes import *
 from typing import Optional
+from sklearn.neighbors import KDTree
 from multiprocessing import shared_memory
 from dynamics import EOM_kin_ca
 
@@ -128,6 +129,9 @@ class LidarReader(threading.Thread):
                 try: self.q.put_nowait(pts)
                 except queue.Full: pass
                 self.dropped += 1
+
+    def get_min_objects(self):
+        pass
         
         
 class MPC:
@@ -154,8 +158,9 @@ class MPC:
         self.safe_radius = 0.1
         self.obst_alpha = 1e-3
         self.max_obsts = 10
-        self.lidar_deg_res = 1.05
+        self.lidar_deg_res = 1.05 #deg
         self.lidar_zero_idx = 113
+        self.lidar_offset = 0
 
         self.lidar_shm = ShmRegion(lidar_shm_name, LIDAR_DTYPE, create=False)
         self.lidar_sem = NamedSemaphore(lidar_sem_name)
@@ -163,12 +168,6 @@ class MPC:
 
         self.lidar_reader = LidarReader(self.lidar_shm, self.lidar_sem, self.lidar_q)
         self._stop = threading.Event()
-
-        #so_file = "/home/jwest33/repos/SE423FinalProj/workspace/mpc/plot_sem.so"
-        #self.fcn = CDLL(so_file)
-        #self.fcn.my_sem_open()
-
-        #self.shm_dist = [0]*228
 
         self.mpc_setup_problem()
 
@@ -257,14 +256,15 @@ class MPC:
         try:
             scan = self.lidar_q.get(timeout=0.1)
 
-            close_scan = np.asarray([x for x in scan if x < 200000])
+            close_scan_idx = np.where(scan < 200000)
+            close_scan = scan[close_scan_idx]
 
             if len(close_scan) == 0:
                 return
 
             k = min(self.max_obsts, len(close_scan))
 
-            idx = np.argpartition(np.abs(close_scan), k - 1)[:k]
+            idx = np.argpartition(close_scan, k - 1)[:k]
             print(idx)
             min_scan = close_scan[idx]
 
@@ -275,6 +275,7 @@ class MPC:
                 min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
                 min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
 
+            min_scan_xy = self.transform_lidar(min_scan)
             self.opti.set_value(self.obst_pos, min_scan_xy)
             
         except queue.Empty:
@@ -288,6 +289,19 @@ class MPC:
 
     def solve_mpc(self):
         pass
+
+    def transform_lidar(self, min_scan):
+
+        self.robot_theta = 0
+        self.robot_x = 0
+        self.robot_y = 0
+
+        theta_std = self.robot_theta - np.pi / 2
+        R = np.array([[np.cos(theta_std), -np.sin(theta_std)],
+                      [np.sin(theta_std), np.cos(theta_std)]])
+        lidar_origin = np.array([self.robot_x, self.robot_y]).reshape(2,1) + R @ np.array([0, self.lidar_offset]).reshape(2,1)
+        min_scan_world = R @ min_scan + lidar_origin
+        return min_scan_world
 
 
 x_next = np.array([0, 0, 0])
