@@ -7,7 +7,6 @@ import queue
 
 from ctypes import *
 from typing import Optional
-from sklearn.neighbors import KDTree
 from multiprocessing import shared_memory
 from dynamics import EOM_kin_ca
 
@@ -157,7 +156,7 @@ class MPC:
         # Obstacle inflation radius and cost weight
         self.safe_radius = 0.1
         self.obst_alpha = 1e-3
-        self.max_obsts = 10
+        self.max_obsts = 1
         self.lidar_deg_res = 1.05 #deg
         self.lidar_zero_idx = 113
         self.lidar_offset = 0
@@ -254,9 +253,10 @@ class MPC:
     def update_obstacles(self):
         
         try:
-            scan = self.lidar_q.get(timeout=0.1)
+            scan = self.lidar_q.get(timeout=0.1)[1:-1]
 
             close_scan_idx = np.where(scan < 200000)
+            #print(close_scan_idx)
             close_scan = scan[close_scan_idx]
 
             if len(close_scan) == 0:
@@ -274,8 +274,9 @@ class MPC:
                 theta = np.deg2rad(self.lidar_deg_res * (idx[i] - self.lidar_zero_idx))
                 min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
                 min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
-
-            min_scan_xy = self.transform_lidar(min_scan)
+            print(min_scan_xy)
+            min_scan_xy = self.transform_lidar(min_scan_xy)
+            print(min_scan_xy)
             self.opti.set_value(self.obst_pos, min_scan_xy)
             
         except queue.Empty:
@@ -292,11 +293,11 @@ class MPC:
 
     def transform_lidar(self, min_scan):
 
-        self.robot_theta = 0
+        self.robot_theta = np.pi/2
         self.robot_x = 0
         self.robot_y = 0
 
-        theta_std = self.robot_theta - np.pi / 2
+        theta_std = self.robot_theta
         R = np.array([[np.cos(theta_std), -np.sin(theta_std)],
                       [np.sin(theta_std), np.cos(theta_std)]])
         lidar_origin = np.array([self.robot_x, self.robot_y]).reshape(2,1) + R @ np.array([0, self.lidar_offset]).reshape(2,1)
@@ -325,7 +326,7 @@ while np.linalg.norm(x_next[0:2] - x_d[:,-1][0:2]) > 3e-2 and iter_count <= 1e2:
 
 
     mpc.update_obstacles()
-    time.sleep(0.01)
+    time.sleep(0.33)
     '''print(iter_count)
 
     if first_iter:

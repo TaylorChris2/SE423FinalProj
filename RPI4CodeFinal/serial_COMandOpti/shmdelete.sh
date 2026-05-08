@@ -8,3 +8,6 @@ rm /dev/shm/sharedmem-AstarApp-sendto-pose-obstacle
 rm /dev/shm/sharedmem-LINUXCMDApp-recvfrom
 rm /dev/shm/sharedmem-LVCOMApp-readfrom
 rm /dev/shm/sharedmem-LVCOMApp-sendto
+rm /dev/shm/sharedmem-LVCOMApp-readfrom
+rm /dev/shm/sharedmem-MPCApp-sendto
+rm /dev/shm/sharedmem-MPCApp-readfrom

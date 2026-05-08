@@ -69,7 +69,7 @@ char LVto28x[4*LVNUM_TOFROM_FLOATS];
 // Types and Variables for SLAMApp COM  *************************
 #define SLAM_TOFROM_FLOATS 3
 #define SENDTO_MPC_SEM_MUTEX_NAME "/sem-MPCApp-sendto"
-#define SENDTO_MPC_SEM_MUTEX_NAME "/sharedmem-MPCApp-sendto"
+#define SENDTO_MPC_SHARED_MEM_NAME "/sharedmem-MPCApp-sendto"
 #define READFROM_MPC_SEM_MUTEX_NAME "/sem-MPCApp-readfrom"
 #define READFROM_MPC_SHARED_MEM_NAME "/sharedmem-MPCApp-readfrom"
 //union of char and floats to SLAM for reading data from F28x and Sending to SLAMApp
@@ -433,7 +433,7 @@ int main()
   if ((readfrom_SLAMApp_mutex_sem = sem_open(READFROM_MPC_SEM_MUTEX_NAME, O_CREAT, 0660, 0)) == SEM_FAILED)
       error("Error readfrom SLAMApp sem_open");
   // create shared memory for send
-  if ((sendto_SLAMApp_fd_shm = shm_open(SENDTO_MPC_SEM_MUTEX_NAME, O_RDWR | O_CREAT | O_EXCL, 0660)) == -1)
+  if ((sendto_SLAMApp_fd_shm = shm_open(SENDTO_MPC_SHARED_MEM_NAME, O_RDWR | O_CREAT | O_EXCL, 0660)) == -1)
       error("Error sendto SLAMApp shm_open");
   //set the size of the shared memory
   if (ftruncate(sendto_SLAMApp_fd_shm, sizeof(struct shared_memory_sendto_MPCApp)) == -1)
@@ -551,7 +551,6 @@ int main()
           if (receiving_count == 4*LVNUM_TOFROM_FLOATS) {
             receiving_count = 0;
             receiving_state = 0;
-            printf("angle:%.3f,x:%.3f,y:%.3f\n",shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[2],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[0],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[1]);
 
             if (sem_getvalue(sendto_LVCOMApp_mutex_sem,  &sem_count_send) == 0) {
               if (sem_post(sendto_LVCOMApp_mutex_sem) == -1){
@@ -562,13 +561,13 @@ int main()
 			        printf("sendto_LVCOMApp_mutex_sem Not ready!\n");
 			      }
           }
+          printf("angle:%.3f,x:%.3f,y:%.3f\n",shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[2],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[0],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[1]);
         } else if (receiving_state == 22) { // F28379D is sending 3 float values to SLAMApp 
           shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_char[receiving_count] = data;//put data into shared memory
           receiving_count++;
           if (receiving_count == 4*SLAM_TOFROM_FLOATS) {
             receiving_count = 0;
             receiving_state = 0;
-          printf("x:%.3f,y:%.3f,theta:%.3f\n",shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[0],shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[1],shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[2]);
 
             if (sem_getvalue(sendto_SLAMApp_mutex_sem,  &sem_count_send) == 0) {
               if (sem_post(sendto_SLAMApp_mutex_sem) == -1){
@@ -579,6 +578,7 @@ int main()
 			        printf("sendto_SLAMApp_mutex_sem Not ready!\n");
 			      }
           }
+          printf("x:%.3f,y:%.3f,theta:%.3f\n",shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[0],shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[1],shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[2]);
         }
       }
     }
@@ -637,7 +637,7 @@ int main()
 
   shm_unlink(SENDTO_MPC_SEM_MUTEX_NAME);
   shm_unlink(READFROM_MPC_SHARED_MEM_NAME);
-  sem_unlink(SENDTO_MPC_SEM_MUTEX_NAME);
+  sem_unlink(SENDTO_MPC_SHARED_MEM_NAME);
   sem_unlink(READFROM_MPC_SEM_MUTEX_NAME);
 
   shm_unlink(RECVFROM_LINUXCMDAPP_SHARED_MEM_NAME);
