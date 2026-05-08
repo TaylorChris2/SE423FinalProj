@@ -66,6 +66,51 @@ struct shared_memory_readfrom_LVCOMApp
 char LVto28x[4*LVNUM_TOFROM_FLOATS];
 // End Types and Variables for LVCOMApp COM  *************************
 
+// Types and Variables for SLAMApp COM  *************************
+#define SLAM_TOFROM_FLOATS 3
+#define SENDTO_MPC_SEM_MUTEX_NAME "/sem-MPCApp-sendto"
+#define SENDTO_MPC_SEM_MUTEX_NAME "/sharedmem-MPCApp-sendto"
+#define READFROM_MPC_SEM_MUTEX_NAME "/sem-MPCApp-readfrom"
+#define READFROM_MPC_SHARED_MEM_NAME "/sharedmem-MPCApp-readfrom"
+//union of char and floats to SLAM for reading data from F28x and Sending to SLAMApp
+// or reading data from SLAMApp and Sending to F28x
+typedef union {
+    char data_char[4*SLAM_TOFROM_FLOATS];
+    float data_flts[SLAM_TOFROM_FLOATS];
+} int_ToFromSLAM_union;
+
+/////NEW//////////////Make legible to SLAM python file
+// Types and Variables for Python SLAM odometry IPC  *************************
+#define ODOM_SEM_NAME "/slam_odom_sem"
+#define ODOM_SHARED_MEM_NAME "/slam_odom_shm"
+
+typedef struct {
+    uint64_t seq;        // sample counter
+    double   timestamp;  // seconds, same clock source as lidar
+    double   x;          // meters
+    double   y;          // meters
+    double   theta;      // radians
+} slam_odom_shared_t;
+
+
+
+
+
+
+struct shared_memory_sendto_MPCApp
+{
+  int_ToFromSLAM_union new_ToSLAM;
+};
+
+struct shared_memory_readfrom_MPCApp
+{
+  int_ToFromSLAM_union new_FromSLAM;
+};
+
+char SLAMto28x[4*SLAM_TOFROM_FLOATS];
+// End Types and Variables for SLAMApp COM  *************************
+
+
 
 // Types and Variables for AstarApp COM  *************************
 #define SENDTO_ASTARAPP_SEM_MUTEX_NAME "/sem-AstarApp-sendto-pose-obstacle"
@@ -374,6 +419,42 @@ int main()
       error("Error readfrom LVCOMApp mmap");
 // End LVCOMApp Shared Memory  ************************
 
+// SLAMApp Shared Memory  ************************
+  struct shared_memory_sendto_MPCApp *shared_mem_ptr_sendto_SLAMApp;
+  struct shared_memory_readfrom_MPCApp *shared_mem_ptr_readfrom_SLAMApp;
+  sem_t *sendto_SLAMApp_mutex_sem;
+  sem_t *readfrom_SLAMApp_mutex_sem;
+  int sendto_SLAMApp_fd_shm;
+  int readfrom_SLAMApp_fd_shm;
+  //create the semaphore for send floats to SLAMApp 
+  if ((sendto_SLAMApp_mutex_sem = sem_open(SENDTO_MPC_SEM_MUTEX_NAME, O_CREAT, 0660, 0)) == SEM_FAILED)
+      error("Error sendto SLAMApp sem_open");
+  //create the semaphore for read path 
+  if ((readfrom_SLAMApp_mutex_sem = sem_open(READFROM_MPC_SEM_MUTEX_NAME, O_CREAT, 0660, 0)) == SEM_FAILED)
+      error("Error readfrom SLAMApp sem_open");
+  // create shared memory for send
+  if ((sendto_SLAMApp_fd_shm = shm_open(SENDTO_MPC_SEM_MUTEX_NAME, O_RDWR | O_CREAT | O_EXCL, 0660)) == -1)
+      error("Error sendto SLAMApp shm_open");
+  //set the size of the shared memory
+  if (ftruncate(sendto_SLAMApp_fd_shm, sizeof(struct shared_memory_sendto_MPCApp)) == -1)
+      error("Error sendto SLAMApp ftruncate");
+  //map the memory to virtual address
+  if ((shared_mem_ptr_sendto_SLAMApp = mmap(NULL, sizeof(struct shared_memory_sendto_MPCApp), PROT_READ | PROT_WRITE, MAP_SHARED,
+                              sendto_SLAMApp_fd_shm, 0)) == MAP_FAILED)
+      error("Error sendto SLAMApp mmap");
+  // create shared memory for read
+  if ((readfrom_SLAMApp_fd_shm = shm_open(READFROM_MPC_SHARED_MEM_NAME, O_RDWR | O_CREAT | O_EXCL, 0660)) == -1)
+      error("Error readfrom SLAMApp shm_open");
+  //set the size of the shared memory
+  if (ftruncate(readfrom_SLAMApp_fd_shm, sizeof(struct shared_memory_readfrom_MPCApp)) == -1)
+      error("Error readfrom SLAMApp ftruncate");
+  //map the memory to virtual address
+  if ((shared_mem_ptr_readfrom_SLAMApp = mmap(NULL, sizeof(struct shared_memory_readfrom_MPCApp), PROT_READ | PROT_WRITE, MAP_SHARED,
+                              readfrom_SLAMApp_fd_shm, 0)) == MAP_FAILED)
+      error("Error readfrom SLAMApp mmap");
+// End LVCOMApp Shared Memory  ************************
+
+
 // LINUXCMDApp Shared Memory  ************************
   //create the semaphore for recv floats from LINUXCMDApp 
   if ((recvfrom_LINUXCMDApp_mutex_sem = sem_open(RECVFROM_LINUXCMDAPP_SEM_MUTEX_NAME, O_CREAT, 0660, 0)) == SEM_FAILED)
@@ -440,6 +521,9 @@ int main()
           } else if (data == '$') {
               receiving_state = 12;  // LVCOMApp
               receiving_count = 0;
+          } else if (data == '+') {
+              receiving_state = 22;  // SLAMApp
+              receiving_count = 0;
           } else {
               receiving_state = 0;
           }
@@ -458,8 +542,8 @@ int main()
               }
               //printf("posted\n");
             } else {
-				printf("sendto_AstarApp_mutex_sem Not ready!\n");
-			}	
+				      printf("sendto_AstarApp_mutex_sem Not ready!\n");
+			      }	
           }
         } else if (receiving_state == 12) { // F28379D is sending 8 float values to LVCOMApp 
           shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_char[receiving_count] = data;//put data into shared memory
@@ -475,8 +559,25 @@ int main()
               }
               //printf("posted\n");
             } else {
-			  printf("sendto_LVCOMApp_mutex_sem Not ready!\n");
-			}
+			        printf("sendto_LVCOMApp_mutex_sem Not ready!\n");
+			      }
+          }
+        } else if (receiving_state == 22) { // F28379D is sending 3 float values to SLAMApp 
+          shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_char[receiving_count] = data;//put data into shared memory
+          receiving_count++;
+          if (receiving_count == 4*SLAM_TOFROM_FLOATS) {
+            receiving_count = 0;
+            receiving_state = 0;
+          printf("x:%.3f,y:%.3f,theta:%.3f\n",shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[0],shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[1],shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_flts[2]);
+
+            if (sem_getvalue(sendto_SLAMApp_mutex_sem,  &sem_count_send) == 0) {
+              if (sem_post(sendto_SLAMApp_mutex_sem) == -1){
+                error("Error serial_COMandOpti ToSLAM sem_post: send_mutex");
+              }
+              //printf("posted\n");
+            } else {
+			        printf("sendto_SLAMApp_mutex_sem Not ready!\n");
+			      }
           }
         }
       }
@@ -503,6 +604,16 @@ int main()
       sd_writen(LVto28x,4*LVNUM_TOFROM_FLOATS);
     }
 
+    //check if SLAMApp readfrom semaphore posted, can get data
+    if (sem_trywait(readfrom_SLAMApp_mutex_sem) == 0) {
+      for (i = 0; i < 4*SLAM_TOFROM_FLOATS; i++) {
+        SLAMto28x[i] = shared_mem_ptr_readfrom_SLAMApp->new_FromSLAM.data_char[i];
+      }
+      sd_write("*");// Data from SLAMApp to F28379D
+      sd_write("+");
+      sd_writen(SLAMto28x,4*SLAM_TOFROM_FLOATS);
+    }
+
     //check if LINUXCMDApp readfrom semaphore posted, can get data
     if (sem_trywait(recvfrom_LINUXCMDApp_mutex_sem) == 0) {
       for (i = 0; i < 4*CMDNUM_FROM_FLOATS; i++) {
@@ -523,6 +634,11 @@ int main()
   shm_unlink(READFROM_LVCOMAPP_SHARED_MEM_NAME);
   sem_unlink(SENDTO_LVCOMAPP_SEM_MUTEX_NAME);
   sem_unlink(READFROM_LVCOMAPP_SEM_MUTEX_NAME);
+
+  shm_unlink(SENDTO_MPC_SEM_MUTEX_NAME);
+  shm_unlink(READFROM_MPC_SHARED_MEM_NAME);
+  sem_unlink(SENDTO_MPC_SEM_MUTEX_NAME);
+  sem_unlink(READFROM_MPC_SEM_MUTEX_NAME);
 
   shm_unlink(RECVFROM_LINUXCMDAPP_SHARED_MEM_NAME);
   sem_unlink(RECVFROM_LINUXCMDAPP_SEM_MUTEX_NAME);
