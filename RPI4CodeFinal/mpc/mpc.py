@@ -4,13 +4,13 @@ import matplotlib.pyplot as plt
 import time
 import threading
 import queue
+import posix_ipc
 
 from ctypes import *
-from typing import Optional
+from typing import Optional, Tuple
+from collections import deque
 from multiprocessing import shared_memory
 from dynamics import EOM_kin_ca
-
-import posix_ipc
 
 SEM_MUTEX_NAME = "sem-new-ladar-dist"
 SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
@@ -20,6 +20,8 @@ ODOM_DTYPE = np.dtype([
     ('x',         '<f8'),   # 8
     ('y',         '<f8'),   # 8
     ('theta',     '<f8'),   # 8  → 40 bytes
+    ('w_x',     '<f8'),   # 8  → 40 bytes
+    ('w_y',     '<f8'),   # 8  → 40 bytes
 ])
 LIDAR_DTYPE = np.dtype([
     ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
@@ -115,7 +117,7 @@ class LidarReader(threading.Thread):
     def run(self):
         view = self.shm.array
         while not self._stop.is_set():
-            if not self.sem.acquire(timeout=0.2):
+            if not self.sem.acquire_latest(timeout=0.2):
                 continue
             n     = N_BEAMS
             pts   = np.array(view['points'][0, :n], dtype=np.float32, copy=True)
@@ -131,11 +133,42 @@ class LidarReader(threading.Thread):
 
     def get_min_objects(self):
         pass
-        
+
+class OdomReader(threading.Thread):
+    """Drains the lidar semaphore, pushes copies of scans onto a queue."""
+    def __init__(self, shm: ShmRegion, sem: NamedSemaphore, q: queue.LifoQueue):
+        super().__init__(daemon=True, name="OdomReader")
+        self.shm = shm
+        self.sem = sem
+        self.q = q
+        self.last_seq = -1
+        self.received = 0
+        self.dropped = 0
+        self._stop = threading.Event()
+    def stop(self): self._stop.set()
+    def run(self):
+        view = self.shm.array
+        while not self._stop.is_set():
+            if not self.sem.acquire_latest(timeout=0.2):
+                continue
+            x = float(view['x'][0])
+            y = float(view['y'][0])
+            theta = float(view['theta'[0]])
+            w_x = float(view['w_x'][0])
+            w_y = float(view['w_y'][0])
+            self.received += 1
+            try:
+                self.q.put_nowait((x, y, theta, w_x, w_y))
+            except queue.Full:
+                try: self.q.get_nowait()
+                except queue.Empty: pass
+                try: self.q.put_nowait((x, y, theta, w_x, w_y))
+                except queue.Full: pass
+                self.dropped += 1
         
 class MPC:
 
-    def __init__(self, lidar_shm_name: str, lidar_sem_name: str,):
+    def __init__(self, lidar_shm_name: str, lidar_sem_name: str, odom_shm_name: str, odom_sem_name: str):
         self.opti = ca.Opti()
 
         self.NX = 3
@@ -161,21 +194,37 @@ class MPC:
         self.lidar_zero_idx = 113
         self.lidar_offset = 0
 
-        self.lidar_shm = ShmRegion(lidar_shm_name, LIDAR_DTYPE, create=False)
-        self.lidar_sem = NamedSemaphore(lidar_sem_name)
-        self.lidar_q   = queue.LifoQueue(maxsize=4)
+        # Shared memory and semaphore args
+        self.lidar_shm_name = lidar_shm_name
+        self.lidar_sem_name = lidar_sem_name
+        self.odom_shm_name = odom_shm_name
+        self.odom_sem_name = odom_sem_name
 
-        self.lidar_reader = LidarReader(self.lidar_shm, self.lidar_sem, self.lidar_q)
-        self._stop = threading.Event()
-
+        self.init_threads()
         self.mpc_setup_problem()
 
+    def init_threads(self):
+        
+        self.lidar_shm = ShmRegion(self.lidar_shm_name, LIDAR_DTYPE, create=False)
+        self.lidar_sem = NamedSemaphore(self.lidar_sem_name)
+        self.lidar_q   = queue.LifoQueue(maxsize=4)
+
+        self.odom_shm  = ShmRegion(self.odom_shm_name,  ODOM_DTYPE,  create=False)
+        self.odom_sem  = NamedSemaphore(self.odom_sem_name)
+        self.odom_q    = queue.LifoQueue(maxsize=16)
+
+        self.lidar_reader = LidarReader(self.lidar_shm, self.lidar_sem, self.lidar_q)
+        self.odom_reader  = OdomReader(self.odom_shm, self.odom_sem, self.odom_q)
+        self._stop = threading.Event()
+    
     def start_threads(self):
         self.lidar_reader.start()
+        self.odom_read.start()
     
     def stop_threads(self):
         self._stop.set()
         self.lidar_reader.stop()
+        self.odom_reader.stop()
 
         # nudge readers blocked on semaphores
         try: self.lidar_sem.release()
@@ -195,7 +244,7 @@ class MPC:
         self.U = self.opti.variable(self.NU, self.N)  # Controls
 
         self.x0 = self.opti.parameter(self.NX)  # Initial state
-        self.xd = self.opti.parameter(self.NX, self.N + 1)  # Reference
+        self.xd = self.opti.parameter(self.NX)  # Reference
 
         # Dynamics constraints
         for k in range(self.N):
@@ -216,7 +265,7 @@ class MPC:
         # Qudratic Cost Function
         self.cost = 0
         for k in range(self.N):
-            self.cost += ca.mtimes([(self.X[:, k] - self.xd[:,k]).T, self.Q, (self.X[:, k] - self.xd[:,k])])
+            self.cost += ca.mtimes([(self.X[:, k] - self.xd).T, self.Q, (self.X[:, k] - self.xd)])
         for k in range(self.N):
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
@@ -282,20 +331,26 @@ class MPC:
         except queue.Empty:
             pass
 
-    def update_robot_pose(self):
-        pass
+    def update_robot_pose_and_waypoints(self):
+        try:
+            data = self.odom_q.get(timeout=0.1)
 
-    def update_waypoints(self):
-        pass
+            self.robot_x = data[0]
+            self.robot_y = data[1]
+            self.robot_theta = data[2]
+            self.waypoint_x = data[3]
+            self.waypoint_y = data[4]
+
+            self.opti.set_value(self.x0, np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
+            self.opti.set_value(self.xd, np.array([self.waypoint_x, self.waypoint_y, 0.0]).reshape(3,1))
+
+        except queue.Empty:
+            pass
 
     def solve_mpc(self):
         pass
 
     def transform_lidar(self, min_scan):
-
-        self.robot_theta = np.pi/2
-        self.robot_x = 0
-        self.robot_y = 0
 
         theta_std = self.robot_theta
         R = np.array([[np.cos(theta_std), -np.sin(theta_std)],
@@ -307,7 +362,6 @@ class MPC:
 
 x_next = np.array([0, 0, 0])
 x_d = np.array([1, 0.5, np.pi/4])
-x_d = np.linspace(x_d, x_d, 21).T
 
 mpc = MPC(SHARED_MEM_NAME, SEM_MUTEX_NAME)
 
@@ -322,10 +376,11 @@ start = time.time()
 
 mpc.start_threads()
 
-while np.linalg.norm(x_next[0:2] - x_d[:,-1][0:2]) > 3e-2 and iter_count <= 1e2:
+while np.linalg.norm(x_next[0:2] - x_d[0:2]) > 3e-2 and iter_count <= 1e2:
 
 
     mpc.update_obstacles()
+    mpc.update_robot_pose_and_waypoints()
     time.sleep(0.33)
     '''print(iter_count)
 
