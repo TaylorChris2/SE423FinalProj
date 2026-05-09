@@ -18,7 +18,7 @@ def EOM_kin(X, dt, r):
 
     A = np.eye(3)
     B = np.array([[dt * np.cos(theta), 0],
-                  [0.5 * dt * np.sin(theta), 0],
+                  [dt * np.sin(theta), 0],
                   [0, dt]])
     
     return A, B

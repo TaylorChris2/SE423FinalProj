@@ -31,6 +31,11 @@ ODOM_DTYPE = np.dtype([
 LIDAR_DTYPE = np.dtype([
     ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
 ])
+CONTROL_DTYPE = np.dtype([
+    ('Vref', '<f4'),
+    ('Turnref', '<f4'),
+    ('seq', '<u4'),
+])
 
 class ShmRegion:
     """A POSIX shared-memory region viewed as a numpy structured scalar."""
@@ -176,7 +181,7 @@ class OdomReader(threading.Thread):
         
 class MPC:
 
-    def __init__(self, lidar_shm_name: str, lidar_sem_name: str, odom_shm_name: str, odom_sem_name: str):
+    def __init__(self, lidar_shm_name: str, lidar_sem_name: str, odom_shm_name: str, odom_sem_name: str, control_shm_name: str, control_sem_name: str):
         self.opti = ca.Opti()
 
         self.NX = 3
@@ -185,13 +190,13 @@ class MPC:
         self.dt = 0.25
 
         # Control bounds
-        self.v_l_max = 0.1
-        self.v_r_max = 0.1
-        self.du_max = 0.1
+        self.v_l_max = 3
+        self.v_r_max = 1
+        self.du_max = 10
 
         # Cost matrices
-        self.Q = ca.diag(ca.DM([1000.0, 1000.0, 10.0]))
-        self.R = ca.diag(ca.DM([5, 5]))
+        self.Q = ca.diag(ca.DM([50.0, 50.0, 1.0]))
+        self.R = ca.diag(ca.DM([10, 50]))
         
         # Obstacle inflation radius and cost weight
         self.safe_radius = 0.1
@@ -207,12 +212,16 @@ class MPC:
         self.robot_theta = 0
         self.Xprev = np.zeros((self.NX, self.N + 1))
         self.Uprev = np.zeros((self.NU, self.N))
+        self.X_sol = np.zeros((self.NX, self.N + 1))
+        self.U_sol = np.zeros((self.NU, self.N))
 
         # Shared memory and semaphore args
         self.lidar_shm_name = lidar_shm_name
         self.lidar_sem_name = lidar_sem_name
         self.odom_shm_name = odom_shm_name
         self.odom_sem_name = odom_sem_name
+        self.control_shm_name = control_shm_name
+        self.control_sem_name = control_sem_name
 
         self.init_threads()
         self.mpc_setup_problem()
@@ -232,6 +241,9 @@ class MPC:
         self.lidar_reader = LidarReader(self.lidar_shm, self.lidar_sem, self.lidar_q)
         self.odom_reader  = OdomReader(self.odom_shm, self.odom_sem, self.odom_q)
         self._stop = threading.Event()
+        
+        self.control_shm  = ShmRegion(self.control_shm_name,  CONTROL_DTYPE,  create=False)
+        self.control_sem  = NamedSemaphore(self.control_sem_name)
     
     def start_threads(self):
         self.lidar_reader.start()
@@ -350,15 +362,16 @@ class MPC:
     def update_robot_pose_and_waypoints(self):
         try:
             data = self.odom_q.get(timeout=0.1)
-            print(data)
+            #print(data)
 
-            self.robot_x = data[0]
-            self.robot_y = data[1]
+            self.robot_x = 0 * 10 + 1 * data[0]
+            self.robot_y = 0 * 10 + 1 * data[1]
             self.robot_theta = data[2]
             self.waypoint_x = data[3]
             self.waypoint_y = data[4]
 
             self.opti.set_value(self.x0, np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
+            #print("Set x0 to", np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
             self.opti.set_value(self.xd, np.array([self.waypoint_x, self.waypoint_y, 0.0]).reshape(3,1))
 
         except queue.Empty:
@@ -370,13 +383,13 @@ class MPC:
         
         sol = self.opti.solve()
         
-        self.X = sol.value(self.X)  # Optimal states (NX x N+1)
-        self.U = sol.value(self.U)  # Optimal controls (NU x N)
+        self.X_sol = sol.value(self.X)  # Optimal states (NX x N+1)
+        self.U_sol = sol.value(self.U)  # Optimal controls (NU x N)
     	
-        print(self.U[:,0])
+        #print(self.U_sol[:,0])
     	
-        self.Xprev = self.X
-        self.Uprev = self.U
+        self.Xprev = self.X_sol
+        self.Uprev = self.U_sol
 
     def transform_lidar(self, min_scan):
 
@@ -387,12 +400,16 @@ class MPC:
         min_scan_world = R @ min_scan + lidar_origin
         return min_scan_world
 
-    def publish_control(self, shm: ShmRegion, sem: NamedSemaphore, U: np.ndarray):
+    def publish_control(self, U: np.ndarray):
+        shm = self.control_shm
+        sem = self.control_sem
+        
         view = shm.array
         U = U.astype(np.float32)
+        #print(U)
 
         view["Vref"][0] = float(U[0])
-        view["Turnref"][0] = float(U[1])
+        view["Turnref"][0] = -float(U[1])
 
         # write sequence last so readers see a consistent frame
         self.seq_counter += 1
@@ -405,7 +422,7 @@ class MPC:
 x_next = np.array([0, 0, 0])
 x_d = np.array([1, 0.5, np.pi/4])
 
-mpc = MPC(LIDAR_SHARED_MEM_NAME, LIDAR_SEM_MUTEX_NAME, ODOM_SHARED_MEM_NAME, ODOM_SEM_MUTEX_NAME)
+mpc = MPC(LIDAR_SHARED_MEM_NAME, LIDAR_SEM_MUTEX_NAME, ODOM_SHARED_MEM_NAME, ODOM_SEM_MUTEX_NAME, CONTROL_SHARED_MEM_NAME, CONTROL_SEM_MUTEX_NAME)
 
 first_iter = True
 iter_count = 1
@@ -424,7 +441,7 @@ while np.linalg.norm(x_next[0:2] - x_d[0:2]) > 3e-2 and iter_count <= 1e2:
     #mpc.update_obstacles()
     mpc.update_robot_pose_and_waypoints()
     mpc.solve_mpc()
-    mpc.publish_control(CONTROL_SHARED_MEM_NAME, CONTROL_SEM_MUTEX_NAME, mpc.U, mpc.seq_counter)
+    mpc.publish_control(mpc.U_sol[:,0])
     #time.sleep(0.33)
     '''print(iter_count)
 
