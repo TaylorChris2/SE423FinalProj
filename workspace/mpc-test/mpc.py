@@ -20,8 +20,9 @@ class MPC:
         self.r = 0.05
 
         # Control bounds
-        self.v_l_max = 0.1
-        self.v_r_max = 0.1
+        self.v_l_max = 0.3
+        self.v_r_max = 0.3
+        self.du_max = 0.3
 
          # Decision variables
         self.X = self.opti.variable(self.NX, self.N + 1)  # States
@@ -42,6 +43,9 @@ class MPC:
         # Control bounds
         self.opti.subject_to(self.opti.bounded(-self.v_l_max, self.U[0, :], self.v_l_max))
         self.opti.subject_to(self.opti.bounded(-self.v_r_max, self.U[1, :], self.v_r_max))
+        for k in range(N-1):    
+            delta = self.U[:, k+1] - self.U[:, k]         # 2x1    
+            self.opti.subject_to(self.opti.bounded(-self.du_max, delta / self.dt, self.du_max))
 
         # Quadratic cost
         Q = ca.diag(ca.DM([1000.0, 1000.0, 10.0]))   # Penalize x,y error more
@@ -76,9 +80,9 @@ class MPC:
         #         margin = ca.sqrt(dist_sq) - self.safe_radius
         #         cost += (ca.exp(1 / (self.weight * ca.fmax(margin, 1e-4))) - 1)
 
-        self.obst_num = 50
+        self.obst_num = 4
         self.safe_radius = 0.1
-        self.weight = 50
+        self.weight = 100
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
         self.obst_pos = self.opti.parameter(2, self.obst_num)
@@ -97,10 +101,13 @@ class MPC:
 
             # Vectorized margin
             dist = ca.sqrt(dist_sq)
+            
+            
             margin = ca.fmax(dist - self.safe_radius, 1e-4)
-
             # Sum cost over all obstacles at this timestep
-            obst_cost += ca.sum2(ca.exp(1.0 / (self.weight * margin)) - 1)
+            # obst_cost += ca.sum2(ca.exp(1.0 / (self.weight * margin)) - 1)
+            alpha = 1e-3
+            obst_cost += ca.sum2(alpha / margin**2)
 
         cost += obst_cost
         
@@ -111,7 +118,10 @@ class MPC:
             "ipopt.max_iter": 1e3,
             "ipopt.tol": 1e-5,
             "ipopt.print_level": 0,
-            "ipopt.linear_solver": "mumps"
+            "ipopt.linear_solver": "mumps",
+            "ipopt.mu_strategy": "adaptive",
+            "ipopt.warm_start_init_point": "yes",
+            # "ipopt.warm_start_mult_bound_push": 1e-6
         }
         self.opti.solver("ipopt", solver_opts)
 
