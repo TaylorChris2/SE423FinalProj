@@ -16,6 +16,8 @@ LIDAR_SEM_MUTEX_NAME = "sem-new-ladar-dist"
 LIDAR_SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
 ODOM_SEM_MUTEX_NAME = "sem-LVCOMApp-sendto"
 ODOM_SHARED_MEM_NAME = "sharedmem-LVCOMApp-sendto"
+CONTROL_SEM_MUTEX_NAME = "sem-LVCOMApp-readfrom"
+CONTROL_SHARED_MEM_NAME = "sharedmem-LVCOMApp-readfrom"
 
 N_BEAMS = 228
 ODOM_DTYPE = np.dtype([
@@ -217,6 +219,8 @@ class MPC:
 
     def init_threads(self):
         
+        self.seq_counter = 0
+
         self.lidar_shm = ShmRegion(self.lidar_shm_name, LIDAR_DTYPE, create=False)
         self.lidar_sem = NamedSemaphore(self.lidar_sem_name)
         self.lidar_q   = queue.LifoQueue(maxsize=4)
@@ -281,21 +285,21 @@ class MPC:
         for k in range(self.N):
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
-        # Store obstacles as (2 x obst_num) parameter for vectorized ops
-        #self.obst_pos = self.opti.parameter(2, self.max_obsts)
+        # # Store obstacles as (2 x obst_num) parameter for vectorized ops
+        # self.obst_pos = self.opti.parameter(2, self.max_obsts)
 
-        #for k in range(self.N + 1):
-            ## Robot position at timestep k: (2 x 1)
-            #pos_k = self.X[:2, k]  # shape (2,)
-            # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
-            #diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
-            ## Squared distances: (1 x obst_num)
-            #dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
-            ## Vectorized margin
-            #dist = ca.sqrt(dist_sq)
+        # for k in range(self.N + 1):
+        #     # Robot position at timestep k: (2 x 1)
+        #     pos_k = self.X[:2, k]  # shape (2,)
+        #     #Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
+        #     diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
+        #     # Squared distances: (1 x obst_num)
+        #     dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
+        #     # Vectorized margin
+        #     dist = ca.sqrt(dist_sq)
             
-            #margin = ca.fmax(dist - self.safe_radius, 1e-4)
-            #self.cost += ca.sum2(self.obst_alpha / margin**2)
+        #     margin = ca.fmax(dist - self.safe_radius, 1e-4)
+        #     self.cost += ca.sum2(self.obst_alpha / margin**2)
 
         self.opti.minimize(self.cost)
 
@@ -383,6 +387,20 @@ class MPC:
         min_scan_world = R @ min_scan + lidar_origin
         return min_scan_world
 
+    def publish_control(self, shm: ShmRegion, sem: NamedSemaphore, U: np.ndarray):
+        view = shm.array
+        U = U.astype(np.float32)
+
+        view["Vref"][0] = float(U[0])
+        view["Turnref"][0] = float(U[1])
+
+        # write sequence last so readers see a consistent frame
+        self.seq_counter += 1
+        view['seq'][0] = int(self.seq_counter)
+
+        # notify readers
+        sem.release()   # or sem.post() depending on your NamedSemaphore API
+
 
 x_next = np.array([0, 0, 0])
 x_d = np.array([1, 0.5, np.pi/4])
@@ -406,6 +424,7 @@ while np.linalg.norm(x_next[0:2] - x_d[0:2]) > 3e-2 and iter_count <= 1e2:
     #mpc.update_obstacles()
     mpc.update_robot_pose_and_waypoints()
     mpc.solve_mpc()
+    mpc.publish_control(CONTROL_SHARED_MEM_NAME, CONTROL_SEM_MUTEX_NAME, mpc.U, mpc.seq_counter)
     #time.sleep(0.33)
     '''print(iter_count)
 
