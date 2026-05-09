@@ -31,7 +31,8 @@ int sd_setup(char *dn)
   
   
   tcgetattr(sd_dev_fd, &sd_options);
-  sd_options.c_cflag = B2000000 | CS8 | CLOCAL | CREAD;
+//  sd_options.c_cflag = B2000000 | CS8 | CLOCAL | CREAD;
+  sd_options.c_cflag = B115200 | CS8 | CLOCAL | CREAD;
 // 1.5Mhz fastest you can go on Orange Pi Zero.  
   sd_options.c_iflag = IGNPAR;
   sd_options.c_oflag = 0;

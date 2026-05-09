@@ -553,6 +553,7 @@ int main()
             receiving_state = 0;
 
             if (sem_getvalue(sendto_LVCOMApp_mutex_sem,  &sem_count_send) == 0) {
+            printf("x:%.3f,y:%.3f,theta:%.3f,w_x:%.3f,w_y:%.3f\n",shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[0],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[1],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[2],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[3],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[4]);
               if (sem_post(sendto_LVCOMApp_mutex_sem) == -1){
                 error("Error serial_COMandOpti sem_post: send_mutex");
               }
@@ -561,7 +562,7 @@ int main()
 			        printf("sendto_LVCOMApp_mutex_sem Not ready!\n");
 			      }
           }
-          printf("angle:%.3f,x:%.3f,y:%.3f\n",shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[2],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[0],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[1]);
+          
         } else if (receiving_state == 22) { // F28379D is sending 3 float values to SLAMApp 
           shared_mem_ptr_sendto_SLAMApp->new_ToSLAM.data_char[receiving_count] = data;//put data into shared memory
           receiving_count++;
