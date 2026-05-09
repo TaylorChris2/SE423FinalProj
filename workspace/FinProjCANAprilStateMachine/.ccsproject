@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<?ccsproject version="1.0"?>
+<projectOptions>
+	<ccsVariant value="0:Eclipse-based"/>
+	<ccsVersion value="12.7.0"/>
+	<deviceVariant value="TMS320C28XX.TMS320F28379D"/>
+	<deviceFamily value="C2000"/>
+	<deviceEndianness value="little"/>
+	<codegenToolVersion value="22.6.1.LTS"/>
+	<isElfFormat value="false"/>
+	<rts value="libc.a"/>
+	<createSlaveProjects value=""/>
+	<templateProperties value="id=finalprojectwithCANAprilstarter.projectspec.FinalProjectwithCANAprilStarter"/>
+	<origin value="/Users/christopher/TeamControl/SE423FinalProj/C2000Ware_4_01_00_00/device_support/f2837xd/examples/cpu1/FinalProjectwithCANAprilStarter/cpu01/ccs/finalprojectwithCANAprilstarter.projectspec"/>
+	<filesToOpen value=""/>
+</projectOptions>
