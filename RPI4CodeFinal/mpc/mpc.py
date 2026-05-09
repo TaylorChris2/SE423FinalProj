@@ -12,16 +12,19 @@ from collections import deque
 from multiprocessing import shared_memory
 from dynamics import EOM_kin_ca
 
-SEM_MUTEX_NAME = "sem-new-ladar-dist"
-SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
+LIDAR_SEM_MUTEX_NAME = "sem-new-ladar-dist"
+LIDAR_SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
+ODOM_SEM_MUTEX_NAME = "sem-LVCOMApp-sendto"
+ODOM_SHARED_MEM_NAME = "sharedmem-LVCOMApp-sendto"
 
 N_BEAMS = 228
 ODOM_DTYPE = np.dtype([
-    ('x',         '<f8'),   # 8
-    ('y',         '<f8'),   # 8
-    ('theta',     '<f8'),   # 8  → 40 bytes
-    ('w_x',     '<f8'),   # 8  → 40 bytes
-    ('w_y',     '<f8'),   # 8  → 40 bytes
+    ('x', '<f4'),
+    ('y', '<f4'),
+    ('theta', '<f4'),
+    ('w_x', '<f4'),
+    ('w_y', '<f4'),
+    ('unused', '<f4', (3,)),   # remaining LV floats
 ])
 LIDAR_DTYPE = np.dtype([
     ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
@@ -41,6 +44,9 @@ class ShmRegion:
             self.shm = shared_memory.SharedMemory(name=name, create=True, size=size)
         else:
             self.shm = shared_memory.SharedMemory(name=name, create=False)
+        print("shm name:", self.name)
+        print("dtype size:", dtype.itemsize)
+        print("shm size:", self.shm.size)
         self.array = np.ndarray((1,), dtype=dtype, buffer=self.shm.buf)
     def close(self):
         try: self.shm.close()
@@ -153,7 +159,7 @@ class OdomReader(threading.Thread):
                 continue
             x = float(view['x'][0])
             y = float(view['y'][0])
-            theta = float(view['theta'[0]])
+            theta = float(view['theta'][0])
             w_x = float(view['w_x'][0])
             w_y = float(view['w_y'][0])
             self.received += 1
@@ -175,7 +181,6 @@ class MPC:
         self.NU = 2
         self.N = 20
         self.dt = 0.25
-        self.r = 0.05
 
         # Control bounds
         self.v_l_max = 0.1
@@ -193,6 +198,13 @@ class MPC:
         self.lidar_deg_res = 1.05 #deg
         self.lidar_zero_idx = 113
         self.lidar_offset = 0
+        
+        # Initial pose
+        self.robot_x = 0
+        self.robot_y = 0
+        self.robot_theta = 0
+        self.Xprev = np.zeros((self.NX, self.N + 1))
+        self.Uprev = np.zeros((self.NU, self.N))
 
         # Shared memory and semaphore args
         self.lidar_shm_name = lidar_shm_name
@@ -219,7 +231,7 @@ class MPC:
     
     def start_threads(self):
         self.lidar_reader.start()
-        self.odom_read.start()
+        self.odom_reader.start()
     
     def stop_threads(self):
         self._stop.set()
@@ -248,7 +260,7 @@ class MPC:
 
         # Dynamics constraints
         for k in range(self.N):
-            A, B = EOM_kin_ca(self.X[:, k], self.dt, self.r)
+            A, B = EOM_kin_ca(self.X[:, k], self.dt)
             x_next = ca.mtimes([A, self.X[:, k]]) + ca.mtimes([B, self.U[:, k]])
             self.opti.subject_to(self.X[:, k + 1] == x_next)
 
@@ -270,20 +282,20 @@ class MPC:
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
-        self.obst_pos = self.opti.parameter(2, self.max_obsts)
+        #self.obst_pos = self.opti.parameter(2, self.max_obsts)
 
-        for k in range(self.N + 1):
-            # Robot position at timestep k: (2 x 1)
-            pos_k = self.X[:2, k]  # shape (2,)
+        #for k in range(self.N + 1):
+            ## Robot position at timestep k: (2 x 1)
+            #pos_k = self.X[:2, k]  # shape (2,)
             # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
-            diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
-            # Squared distances: (1 x obst_num)
-            dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
-            # Vectorized margin
-            dist = ca.sqrt(dist_sq)
+            #diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
+            ## Squared distances: (1 x obst_num)
+            #dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
+            ## Vectorized margin
+            #dist = ca.sqrt(dist_sq)
             
-            margin = ca.fmax(dist - self.safe_radius, 1e-4)
-            self.cost += ca.sum2(self.obst_alpha / margin**2)
+            #margin = ca.fmax(dist - self.safe_radius, 1e-4)
+            #self.cost += ca.sum2(self.obst_alpha / margin**2)
 
         self.opti.minimize(self.cost)
 
@@ -314,7 +326,7 @@ class MPC:
             k = min(self.max_obsts, len(close_scan))
 
             idx = np.argpartition(close_scan, k - 1)[:k]
-            print(idx)
+            #print(idx)
             min_scan = close_scan[idx]
 
             min_scan_xy = np.zeros((2, self.max_obsts))
@@ -323,9 +335,9 @@ class MPC:
                 theta = np.deg2rad(self.lidar_deg_res * (idx[i] - self.lidar_zero_idx))
                 min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
                 min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
-            print(min_scan_xy)
+            #print(min_scan_xy)
             min_scan_xy = self.transform_lidar(min_scan_xy)
-            print(min_scan_xy)
+            #print(min_scan_xy)
             self.opti.set_value(self.obst_pos, min_scan_xy)
             
         except queue.Empty:
@@ -334,6 +346,7 @@ class MPC:
     def update_robot_pose_and_waypoints(self):
         try:
             data = self.odom_q.get(timeout=0.1)
+            print(data)
 
             self.robot_x = data[0]
             self.robot_y = data[1]
@@ -348,7 +361,18 @@ class MPC:
             pass
 
     def solve_mpc(self):
-        pass
+        self.opti.set_initial(self.X, self.Xprev)
+        self.opti.set_initial(self.U, self.Uprev)
+        
+        sol = self.opti.solve()
+        
+        self.X = sol.value(self.X)  # Optimal states (NX x N+1)
+        self.U = sol.value(self.U)  # Optimal controls (NU x N)
+    	
+        print(self.U[:,0])
+    	
+        self.Xprev = self.X
+        self.Uprev = self.U
 
     def transform_lidar(self, min_scan):
 
@@ -363,7 +387,7 @@ class MPC:
 x_next = np.array([0, 0, 0])
 x_d = np.array([1, 0.5, np.pi/4])
 
-mpc = MPC(SHARED_MEM_NAME, SEM_MUTEX_NAME)
+mpc = MPC(LIDAR_SHARED_MEM_NAME, LIDAR_SEM_MUTEX_NAME, ODOM_SHARED_MEM_NAME, ODOM_SEM_MUTEX_NAME)
 
 first_iter = True
 iter_count = 1
@@ -379,9 +403,10 @@ mpc.start_threads()
 while np.linalg.norm(x_next[0:2] - x_d[0:2]) > 3e-2 and iter_count <= 1e2:
 
 
-    mpc.update_obstacles()
+    #mpc.update_obstacles()
     mpc.update_robot_pose_and_waypoints()
-    time.sleep(0.33)
+    mpc.solve_mpc()
+    #time.sleep(0.33)
     '''print(iter_count)
 
     if first_iter:
