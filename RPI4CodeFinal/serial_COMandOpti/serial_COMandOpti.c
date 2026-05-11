@@ -600,6 +600,7 @@ int main()
       for (i = 0; i < 4*LVNUM_TOFROM_FLOATS; i++) {
         LVto28x[i] = shared_mem_ptr_readfrom_LVCOMApp->new_FromLV.data_char[i];
       }
+      printf("%.3f\n", shared_mem_ptr_readfrom_LVCOMApp->new_FromLV.data_flts[0]);
       sd_write("*");// Data from LVCOMApp to F28379D
       sd_write("$");
       sd_writen(LVto28x,4*LVNUM_TOFROM_FLOATS);
