@@ -104,7 +104,7 @@ void April_ComputeRobotPose2D(
     tag_left_camera = -tagx * OPENMV_TO_FEET;
 
     // OpenMV currently sends tagthetaz in degrees
-    tag_theta_camera = tagthetaz * PI_APRIL / 180.0f;
+    tag_theta_camera = tagthetaz * PI / 180.0f;
 
     // Known tag pose in world
     April_Make2DTransform(
