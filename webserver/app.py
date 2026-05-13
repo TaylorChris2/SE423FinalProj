@@ -6,54 +6,62 @@ import numpy as np
 import numpy as np
 import posix_ipc
 import time
+from ctypes import *
+from typing import Optional, Tuple
 
 
 
 from multiprocessing import shared_memory
 
+
 class ShmRegion:
-    def __init__(self, name, dtype, create=False):
-
+    """A POSIX shared-memory region viewed as a numpy structured scalar."""
+    def __init__(self, name: str, dtype: np.dtype, create: bool = False):
+        self.name = name
         size = dtype.itemsize
-
         if create:
             try:
-                old = shared_memory.SharedMemory(name=name)
-                old.close()
-                old.unlink()
+                old = shared_memory.SharedMemory(name=name, create=False)
+                old.close(); old.unlink()
             except FileNotFoundError:
                 pass
-
-            self.shm = shared_memory.SharedMemory(name=name,create=True,size=size)
-
+            self.shm = shared_memory.SharedMemory(name=name, create=True, size=size)
         else:
-            self.shm = shared_memory.SharedMemory(name=name,create=False)
-
-        self.array = np.ndarray((1,),dtype=dtype,buffer=self.shm.buf)
+            self.shm = shared_memory.SharedMemory(name=name, create=False)
+        print("shm name:", self.name)
+        print("dtype size:", dtype.itemsize)
+        print("shm size:", self.shm.size)
+        self.array = np.ndarray((1,), dtype=dtype, buffer=self.shm.buf)
+    def close(self):
+        try: self.shm.close()
+        except Exception: pass
+    def unlink(self):
+        try: self.shm.unlink()
+        except Exception: pass
 
 class NamedSemaphore:
-    def __init__(self, name, create=False, initial=0):
-
+    """A POSIX named semaphore. Same name across producer and consumer."""
+    def __init__(self, name: str, create: bool = False, initial: int = 0):
+        self.name = name
         if create:
             try:
                 posix_ipc.unlink_semaphore(name)
-            except:
+            except posix_ipc.ExistentialError:
                 pass
-
             self.sem = posix_ipc.Semaphore(
                 name, flags=posix_ipc.O_CREAT | posix_ipc.O_EXCL,
                 initial_value=initial)
-
         else:
             self.sem = posix_ipc.Semaphore(name)
-
-    def release(self):
-        self.sem.release()
-
-    def acquire(self):
-        self.sem.acquire()
-
-    def acquire_latest(self, timeout):
+    
+    def acquire(self, timeout: Optional[float] = None) -> bool:
+        try:
+            self.sem.acquire(timeout)
+            return True
+        except posix_ipc.BusyError:
+            return False
+    
+    def acquire_latest(self, timeout: Optional[float] = None) -> bool:
         """
         Wait for at least one post,
         then drain all remaining semaphore counts by getting one.
@@ -73,6 +81,18 @@ class NamedSemaphore:
 
         return True
 
+    def release(self):
+        self.sem.release()
+    def release(self):
+        self.sem.release()
+    def close(self):
+        try: self.sem.close()
+        except Exception: pass
+    def unlink(self):
+        try: posix_ipc.unlink_semaphore(self.name)
+        except posix_ipc.ExistentialError: pass
+
+
 
 waypoint_seq = 0
 
@@ -86,8 +106,9 @@ current_waypoints = []
 
 WAYPOINT_SEM_NAME = "sem-LVCOMApp-sendto"
 WAYPOINT_SHM_NAME = "sharedmem-LVCOMApp-sendto"
-FEEDBACK_SHM_NAME = "sharedmem-LVCOMApp-readfrom"
 FEEDBACK_SEM_NAME = "sem-LVCOMApp-readfrom"
+FEEDBACK_SHM_NAME = "sharedmem-LVCOMApp-readfrom"
+
 WAYPOINT_START = 999.0
 WAYPOINT_MIDDLE = 888.0
 WAYPOINT_END = 777.0
@@ -122,6 +143,7 @@ waypoint_sem = NamedSemaphore(
 
 feedback_shm = ShmRegion(FEEDBACK_SHM_NAME, FEEDBACK_DTYPE, create=False)
 feedback_sem = NamedSemaphore(FEEDBACK_SEM_NAME, create=False)
+
 robot_position = [0, 0, 0]
 current_waypoint_index = 0
 navigation_state = STATUS_IDLE
