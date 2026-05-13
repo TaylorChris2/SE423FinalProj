@@ -92,8 +92,16 @@ volatile uint32_t errorFlag = 0;
 uint32_t numTimer0calls = 0;
 uint16_t UARTPrint = 0;
 
-float printLV1 = 0;
-float printLV2 = 0;
+float Vref1 = 0;
+float Turnref1 = 0;
+float Vref2 = 0;
+float Turnref2 = 0;
+float Vref3 = 0;
+float Turnref3 = 0;
+uint16_t dt_control = 0;
+uint16_t flag_control = 1;
+
+uint32_t control_count = 0;
 
 float printLinux1 = 0;
 float printLinux2 = 0;
@@ -276,8 +284,7 @@ int16_t dan28027adc1 = 0;
 int16_t dan28027adc2 = 0;
 uint16_t MPU9250ignoreCNT = 0;  //This is ignoring the first few interrupts if ADCC_ISR and start sending to IMU after these first few interrupts.
 
-void main(void)
-{
+void main(void) {
     // PLL, WatchDog, enable Peripheral Clocks
     // This example function is found in the F2837xD_SysCtrl.c file.
     InitSysCtrl();
@@ -484,7 +491,8 @@ void main(void)
     EPwm4Regs.TBCTL.bit.CTRMODE = 0; //unfreeze, and enter up count mode
 	
     init_serialSCIA(&SerialA,115200);
-    init_serialSCID(&SerialD,2083332);
+//    init_serialSCID(&SerialD,2083332);
+    init_serialSCID(&SerialD,115200);
 
     // Enable global Interrupts and higher priority real-time debug events
     EINT;  // Enable Global interrupt INTM
@@ -594,11 +602,12 @@ void main(void)
             if (readbuttons() == 0) {
                 UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);				
 //                UART_printfLine(1,"x:%.2f:y:%.2f:a%.2f",ROBOTps.x,ROBOTps.y,ROBOTps.theta);
-                UART_printfLine(2,"F%.4f R%.4f",LADARfront,LADARrightfront);
+//                UART_printfLine(2,"F%.4f R%.4f",LADARfront,LADARrightfront);
+                UART_printfLine(2,"Sent: %.3f, %.3f", fromLVvalues[0], fromLVvalues[1]);
             } else if (readbuttons() == 1) {
                 UART_printfLine(1,"O1A:%.0fC:%.0fR:%.0f",MaxAreaThreshold1,MaxColThreshold1,MaxRowThreshold1);
                 UART_printfLine(2,"P1A:%.0fC:%.0fR:%.0f",MaxAreaThreshold2,MaxColThreshold2,MaxRowThreshold2);
-				//UART_printfLine(1,"LV1:%.3f LV2:%.3f",printLV1,printLV2);
+				//UART_printfLine(1,"LV1:%.3f LV2:%.3f",Vref1,Turnref1);
                 //UART_printfLine(2,"Ln1:%.3f Ln2:%.3f",printLinux1,printLinux2);
             } else if (readbuttons() == 2) {
                 UART_printfLine(1,"O2A:%.0fC:%.0fR:%.0f",NextLargestAreaThreshold1,NextLargestColThreshold1,NextLargestRowThreshold1);
@@ -934,14 +943,15 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 		
         if (NewLVData == 1) {
             NewLVData = 0;
-            printLV1 = fromLVvalues[0];
-            printLV2 = fromLVvalues[1];
-            //?? = fromLVvalues[2];
-            //?? = fromLVvalues[3];
-            //?? = fromLVvalues[4];
-            //?? = fromLVvalues[5];
-            //?? = fromLVvalues[6];
-            //?? = fromLVvalues[7];
+            Vref1 = fromLVvalues[0];
+            Turnref1 = fromLVvalues[1];
+            Vref2 = fromLVvalues[2];
+            Turnref2 = fromLVvalues[3];
+            Vref3 = fromLVvalues[4];
+            Turnref3 = fromLVvalues[5];
+            flag_control = fromLVvalues[6];
+            dt_control = fromLVvalues[7];
+            flag_control = 1;
         }
 
 
@@ -1009,17 +1019,22 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
             // vref and turn are the vref and turn returned from xy_control
 
-            if (LADARfront < 1.2) {
-                vref = 0.2;
-                checkfronttally++;
-                if (checkfronttally > 310) { // check if LADARfront < 1.2 for 310ms or 3 LADAR samples
-                    RobotState = 10; // Wall follow
-                    WallFollowtime = 0;
-                    right_wall_follow_state = 1;
-                }
-            } else {
-                checkfronttally = 0;
+            if (flag_control == 1) {
+                control_count = 0;
+                flag_control = 0;
             }
+
+            if (control_count < dt_control) {
+                vref = Vref1;
+                turn = Turnref1;
+            } else if (control_count < 2 * dt_control) {
+                vref = Vref2;
+                turn = Turnref2;
+            } else {
+                vref = Vref3;
+                turn = Turnref3;
+            }
+            control_count++;
 
             break;
         case 10:
@@ -1074,8 +1089,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             DataToLabView.floatData[0] = ROBOTps.x;
             DataToLabView.floatData[1] = ROBOTps.y;
             DataToLabView.floatData[2] = ROBOTps.theta;
-            DataToLabView.floatData[3] = (float)timecount;
-            DataToLabView.floatData[4] = 0.5*(LeftVel + RightVel);
+            DataToLabView.floatData[3] = 5.0;
+            DataToLabView.floatData[4] = 5.0;
             DataToLabView.floatData[5] = (float)RobotState;
             DataToLabView.floatData[6] = (float)statePos;
             DataToLabView.floatData[7] = LADARfront;
