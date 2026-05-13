@@ -178,12 +178,12 @@ void April_ComputeRobotPose2D_v2(
         break;
     }
     float r = sqrt(tagx*tagx +tagz*tagz);
-    float t_tot = current_tag_world_theta + PI - tagthetaz;
-    float d_xa = tagx;
-    float d_ya = tagz;
+    float t_tot = current_tag_world_theta + PI - tagthetaz*PI/180.0;
+    float d_xa = tagz;
+    float d_ya = tagx;
 
-    april_robot_x = d_xa * cosf(t_tot) - d_ya * sinf(t_tot) + current_tag_world_x;
-    april_robot_y = d_xa * sinf(t_tot) - d_ya * cosf(t_tot) + current_tag_world_y;
-    april_robot_theta = atan2(tagz - april_robot_z, tagx - april_robot_x);
+    april_robot_x = -d_xa * cosf(t_tot) + d_ya * sinf(t_tot) + current_tag_world_x;
+    april_robot_y = -d_xa * sinf(t_tot) - d_ya * cosf(t_tot) + current_tag_world_y;
+    april_robot_theta = atan2(current_tag_world_y - april_robot_y, current_tag_world_x - april_robot_x);
 
 }
