@@ -52,10 +52,8 @@ class NamedSemaphore:
                 pass
 
             self.sem = posix_ipc.Semaphore(
-                name,
-                flags=posix_ipc.O_CREAT,
-                initial_value=initial
-            )
+                name, flags=posix_ipc.O_CREAT | posix_ipc.O_EXCL,
+                initial_value=initial)
 
         else:
             self.sem = posix_ipc.Semaphore(name)
