@@ -3,7 +3,7 @@
 #include "MatrixMath.h"
 #include "AprilTag.h"
 
-#define PI_APRIL 3.14159265f
+#define PI 3.14159265f
 
 float OPENMV_TO_FEET = 1.0f;
 
@@ -148,4 +148,44 @@ void April_ComputeRobotPose2D(
     );
 
     NewAprilRobotPose = 1;
+}
+
+
+void April_ComputeRobotPose2D_v2(
+    float tagid,
+    float tagx,
+    float tagy,
+    float tagz,
+    float tagthetax,
+    float tagthetay,
+    float tagthetaz
+) {
+        
+    float current_tag_world_x = 0.0f;
+    float current_tag_world_y = 0.0f;
+    float current_tag_world_theta = 0.0f;
+    uint16_t known_tag = 1;
+
+    switch ((int)tagid) {
+
+    case 0:
+        // Example: tag 0 is 2 ft in front of world origin
+        current_tag_world_x = 2.0f;
+        current_tag_world_y = 0.0f;
+        current_tag_world_theta = 0.0f;
+        break;
+
+    default:
+        known_tag = 0;
+        break;
+    }
+    float r = sqrt(tagx*tagx +tagy*tagy);
+    float t_tot = current_tag_world_theta + PI - tagthetaz;
+    float d_xa = tagx;
+    float d_ya = tagy;
+
+    april_robot_x = d_xa * cosf(t_tot) - d_ya * sinf(t_tot) + current_tag_world_x;
+    april_robot_y = d_xa * sinf(t_tot) - d_ya * cosf(t_tot) + current_tag_world_y;
+    april_robot_x = atan2(tagy - april_robot_y, tagx - april_robot_x);
+
 }

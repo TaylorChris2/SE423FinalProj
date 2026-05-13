@@ -104,10 +104,10 @@ robot_position = [0, 0]
 current_waypoint_index = 0
 current_waypoints = []
 
-WAYPOINT_SEM_NAME = "sem-LVCOMApp-readfrom"
-WAYPOINT_SHM_NAME = "sharedmem-LVCOMApp-readfrom"
-FEEDBACK_SEM_NAME = "sem-LVCOMApp-sendto"
-FEEDBACK_SHM_NAME = "sharedmem-LVCOMApp-sendto"
+WAYPOINT_SEM_NAME = "sem-LVCOMApp-sendto"
+WAYPOINT_SHM_NAME = "sharedmem-LVCOMApp-sendto"
+FEEDBACK_SEM_NAME = "sharedmem-LVCOMApp-readfrom"
+FEEDBACK_SHM_NAME = "sem-LVCOMApp-readfrom"
 
 WAYPOINT_START = 999.0
 WAYPOINT_MIDDLE = 888.0
