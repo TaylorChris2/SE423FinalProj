@@ -24,23 +24,12 @@ class ShmRegion:
             except FileNotFoundError:
                 pass
 
-            self.shm = shared_memory.SharedMemory(
-                name=name,
-                create=True,
-                size=size
-            )
+            self.shm = shared_memory.SharedMemory(name=name,create=True,size=size)
 
         else:
-            self.shm = shared_memory.SharedMemory(
-                name=name,
-                create=False
-            )
+            self.shm = shared_memory.SharedMemory(name=name,create=False)
 
-        self.array = np.ndarray(
-            (1,),
-            dtype=dtype,
-            buffer=self.shm.buf
-        )
+        self.array = np.ndarray((1,),dtype=dtype,buffer=self.shm.buf)
 
 class NamedSemaphore:
     def __init__(self, name, create=False, initial=0):
@@ -169,6 +158,7 @@ def sendWaypoints(waypoints):
     waypoint_seq += 1
 
     for idx, wp in enumerate(waypoints):
+        print("WAYPOINT: ",idx,wp)
 
         if idx == 0:
             flag = WAYPOINT_START
