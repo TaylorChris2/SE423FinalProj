@@ -1,10 +1,201 @@
 from flask import Flask, render_template, request, jsonify
-import navigator  # your module
+import navigator 
+import numpy as np
+
+
+import numpy as np
+import posix_ipc
+import time
+
+
+
+from multiprocessing import shared_memory
+
+class ShmRegion:
+    def __init__(self, name, dtype, create=False):
+
+        size = dtype.itemsize
+
+        if create:
+            try:
+                old = shared_memory.SharedMemory(name=name)
+                old.close()
+                old.unlink()
+            except FileNotFoundError:
+                pass
+
+            self.shm = shared_memory.SharedMemory(
+                name=name,
+                create=True,
+                size=size
+            )
+
+        else:
+            self.shm = shared_memory.SharedMemory(
+                name=name,
+                create=False
+            )
+
+        self.array = np.ndarray(
+            (1,),
+            dtype=dtype,
+            buffer=self.shm.buf
+        )
+
+class NamedSemaphore:
+    def __init__(self, name, create=False, initial=0):
+
+        if create:
+            try:
+                posix_ipc.unlink_semaphore(name)
+            except:
+                pass
+
+            self.sem = posix_ipc.Semaphore(
+                name,
+                flags=posix_ipc.O_CREAT,
+                initial_value=initial
+            )
+
+        else:
+            self.sem = posix_ipc.Semaphore(name)
+
+    def release(self):
+        self.sem.release()
+
+    def acquire(self):
+        self.sem.acquire()
+
+
+
+waypoint_seq = 0
+
 
 app = Flask(__name__)
 
-navigation_state = "idle"  
-# idle | navigating | paused | arrived
+
+robot_position = [0, 0]
+current_waypoint_index = 0
+current_waypoints = []
+
+WAYPOINT_SEM_NAME = "sem-LVCOMApp-sendto"
+WAYPOINT_SHM_NAME = "sharedmem-LVCOMApp-sendto"
+FEEDBACK_SHM_NAME = "sharedmem-LVCOMApp-readfrom"
+FEEDBACK_SEM_NAME = "sem-LVCOMApp-readfrom"
+WAYPOINT_START = 999.0
+WAYPOINT_MIDDLE = 888.0
+WAYPOINT_END = 777.0
+
+
+STATUS_NAVIGATING = 1
+STATUS_RELOCALIZE_WALL_FOLLOW = 10
+STATUS_APRIL_TAG_VISION = 20
+#Unused currently: - IMPLEMENT?
+STATUS_PAUSED = 2
+STATUS_ARRIVED = 3
+STATUS_IDLE = 0
+
+WAYPOINT_DTYPE = np.dtype([
+    ('data', '<f4', (8,))
+])
+
+FEEDBACK_DTYPE = np.dtype([
+    ('data', '<f4', (8,))
+])
+
+waypoint_shm = ShmRegion(
+    WAYPOINT_SHM_NAME,
+    WAYPOINT_DTYPE,
+    create=True
+)
+
+waypoint_sem = NamedSemaphore(
+    WAYPOINT_SEM_NAME,
+    create=True
+)
+
+feedback_shm = ShmRegion(FEEDBACK_SHM_NAME, FEEDBACK_DTYPE, create=False)
+feedback_sem = NamedSemaphore(FEEDBACK_SEM_NAME, create=False)
+robot_position = [0, 0, 0]
+current_waypoint_index = 0
+navigation_state = STATUS_IDLE
+
+def update_feedback():
+
+    global robot_position
+    global current_waypoint_index
+    global navigation_state
+
+    #Updates status and position from received waypoints
+
+    try:
+        feedback_sem.acquire()
+
+        data = feedback_shm.array['data'][0]
+
+        robot_position = [
+            float(data[0]),
+            float(data[1]),
+            float(data[2])
+        ]
+
+        current_waypoint_index = int(data[6])
+
+        status = int(data[5])
+
+        if status in {
+            STATUS_NAVIGATING,
+            STATUS_RELOCALIZE_WALL_FOLLOW,
+            STATUS_APRIL_TAG_VISION,
+            STATUS_ARRIVED,
+            STATUS_PAUSED}:
+
+            navigation_state = status
+
+
+    except Exception:
+        pass
+
+
+def sendWaypoints(waypoints):
+
+    global waypoint_seq
+
+    total = len(waypoints)
+
+    if total == 0:
+        return
+
+    waypoint_seq += 1
+
+    for idx, wp in enumerate(waypoints):
+
+        if idx == 0:
+            flag = WAYPOINT_START
+
+        elif idx == total - 1:
+            flag = WAYPOINT_END
+
+        else:
+            flag = WAYPOINT_MIDDLE
+
+        x = float(wp[0])
+        y = float(wp[1])
+
+        view = waypoint_shm.array
+
+        view['data'][0,0] = flag
+        view['data'][0,1] = waypoint_seq
+        view['data'][0,2] = idx
+        view['data'][0,3] = total
+        view['data'][0,4] = x
+        view['data'][0,5] = y
+        view['data'][0,6] = 0
+        view['data'][0,7] = 0
+
+        waypoint_sem.release()
+
+        time.sleep(0.005)
 
 @app.route('/')
 def index():
@@ -13,36 +204,44 @@ def index():
 @app.route('/navigate', methods=['POST'])
 def navigate():
     global navigation_state
+    global current_waypoints
+    global current_waypoint_index
 
     data = request.json
     room = data.get('room')
-    try:
-        waypoints = navigator.get_waypoints(room)
-
-        # Tell MPC to start (you implement this)
-        navigator.start_navigation(waypoints)
-
-        navigation_state = "navigating"
         
-        return jsonify({
-            "success": True,
-            "waypoints": waypoints,
-            "state": navigation_state
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+
+    # Calculate A star given waypoints:
+    waypoints = navigator.path_Astar(int(room))
+    
+    current_waypoints = waypoints
+    current_waypoint_index = 0
+
+    sendWaypoints(waypoints)
+
+    # Red borad should receive waypoints and start navigation
+
+    
+    return jsonify({
+        "success": True,
+        "waypoints": waypoints,
+        "state": navigation_state
+    })
+
 
 @app.route('/control', methods=['POST'])
 def control():
     global navigation_state
 
-    if navigation_state == "navigating":
-        navigator.pause()
-        navigation_state = "paused"
+    if navigation_state == STATUS_NAVIGATING:
+        print("PAUSE")
+        #Tell redboard to enter pause state
+        #TODO: Implement another "special" send flag to trigger this on redboard
 
-    elif navigation_state == "paused":
-        navigator.resume()
-        navigation_state = "navigating"
+
+    elif navigation_state == STATUS_PAUSED:
+        #Tell redboard to enter resume state
+        print("RESUME")
 
     return jsonify({"state": navigation_state})
 
@@ -50,11 +249,17 @@ def control():
 def status():
     global navigation_state
 
-    # Ask MPC if done
-    if navigator.is_complete():
-        navigation_state = "arrived"
+    global robot_position
+    global current_waypoint_index
 
-    return jsonify({"state": navigation_state})
+
+    update_feedback()
+
+    return jsonify({
+        "state": navigation_state,
+        "robot_position": robot_position,
+        "current_waypoint_index": current_waypoint_index
+    })
 
 @app.route('/toggle', methods=['POST'])
 def toggle():
@@ -64,4 +269,4 @@ def toggle():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)

@@ -778,6 +778,27 @@ void setF28027EPWM2A(float controleffort){
     EPwm2A_F28027 = (int16_t)value;  // Set global variable that is sent over SPI to F28027
 }
 
+
+/**
+ * These are the command definitions for waypoint loading so the program knows where it is
+ */
+
+#define WAYPOINT_START 999.0
+#define WAYPOINT_MIDDLE 888.0
+#define WAYPOINT_END 777.0
+
+/**
+ * Enum to hold state of mode when receiving data from LV memory
+ */
+typedef enum {
+    LV_MODE_CONTROL = 0,
+    LV_MODE_WAYPOINT_LOAD = 1
+} LVMode_t;
+
+LVMode_t lv_mode = LV_MODE_CONTROL;
+
+uint16_t waypoint_index = 0;
+
 //
 // Connected to PIEIER12_9 (use MINT12 and MG12_9 masks):
 //
@@ -957,16 +978,56 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         }
 		
         if (NewLVData == 1) {
+
+            /**
+             * Receives data from the webserver astar waypoints AND MPC, must determine which is which
+             *
+             * Normally, update 3 control values, but if we receive a flag to start receiving waypoints, switch to that mode.
+             */
+
             NewLVData = 0;
-            Vref1 = fromLVvalues[0];
-            Turnref1 = fromLVvalues[1];
-            Vref2 = fromLVvalues[2];
-            Turnref2 = fromLVvalues[3];
-            Vref3 = fromLVvalues[4];
-            Turnref3 = fromLVvalues[5];
-            flag_control = fromLVvalues[6];
-            dt_control = fromLVvalues[7];
-            flag_control = 1;
+
+            // interperet the first value as a int to see if its a valid command, if not this is a vref value and will be handleed in jordans code
+            uint16_t command = (uint16_t)fromLVvalues[0];
+
+            // Receive flag to start loading up the waypoints
+            if (command == WAYPOINT_START) {
+
+                lv_mode = LV_MODE_WAYPOINT_LOAD;
+                waypoint_index = 0;
+            }
+
+            // We reached the end of the waypoint array, we gotta switch over to jordans mode now
+            else if (command == WAYPOINT_END) {
+
+                lv_mode = LV_MODE_CONTROL;
+                statePos = 0;
+            }
+
+            // Fill the actual waypoint array
+            else if (lv_mode == LV_MODE_WAYPOINT_LOAD) {
+
+                if (waypoint_index < NUMWAYPOINTS) {
+
+                    robotdest[waypoint_index].x = fromLVvalues[0];
+                    robotdest[waypoint_index].y = fromLVvalues[1];
+
+                    waypoint_index++;
+                }
+            }
+
+            // Normal operation in LV_MODE_CONTROL, just do jordans control data
+            else {
+                Vref1 = fromLVvalues[0];
+                Turnref1 = fromLVvalues[1];
+                Vref2 = fromLVvalues[2];
+                Turnref2 = fromLVvalues[3];
+                Vref3 = fromLVvalues[4];
+                Turnref3 = fromLVvalues[5];
+                flag_control = fromLVvalues[6];
+                dt_control = fromLVvalues[7];
+                flag_control = 1;
+            }
         }
 
 
@@ -1029,6 +1090,14 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             statePos = (statePos+1)%NUMWAYPOINTS;
         }
         // state machine
+
+        // States are:
+
+        // 1: Navigate
+        // 10: Relocalize with wall follow?? - idk
+        // 20: April tag vision
+        // TODO: Arrived state? Before start state (when no states have been received)?
+
         switch (RobotState) {
         case 1:
 
