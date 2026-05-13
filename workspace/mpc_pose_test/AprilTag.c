@@ -172,6 +172,7 @@ void April_ComputeRobotPose2D_v2(
         current_tag_world_y = 0.0f;
         current_tag_world_theta = 0.0f;
         break;
+        
 
     default:
         known_tag = 0;
