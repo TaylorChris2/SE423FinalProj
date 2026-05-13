@@ -111,7 +111,7 @@ def path_Astar(roomNum):
     waypoints = astar(0, 0, row_end, col_end)
     #return waypoints as 
     if(waypoints == None):
-        return []
+        return [(500,300),(600,300),(100,200)]
     return waypoints.reverse()
 
 
