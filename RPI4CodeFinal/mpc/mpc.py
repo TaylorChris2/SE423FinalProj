@@ -203,7 +203,7 @@ class MPC:
         self.du_max = 10
 
         # Cost matrices
-        self.Q = ca.diag(ca.DM([50.0, 50.0, 1.0]))
+        self.Q = ca.diag(ca.DM([50.0, 50.0, 10.0]))
         self.R = ca.diag(ca.DM([10, 50]))
         
         # Obstacle inflation radius and cost weight
@@ -330,12 +330,13 @@ class MPC:
 
         # Configure solver
         solver_opts = {
-            "ipopt.max_iter": 1e3,
-            "ipopt.tol": 1e-4,
-            "ipopt.print_level": 0,
+            "ipopt.max_iter": 20,
+            "ipopt.tol": 1e-3,
+            "ipopt.print_level": 5,
             "ipopt.linear_solver": "mumps",
             "ipopt.mu_strategy": "adaptive",
             "ipopt.warm_start_init_point": "yes",
+            "ipopt.max_wall_time": 1.5
             #"print_time": 0,
             #"ipopt.sb": "yes",
             # "ipopt.warm_start_mult_bound_push": 1e-6
@@ -479,25 +480,45 @@ class MPC:
             pass
 
     def solve_mpc(self):
+
         self.opti.set_initial(self.X, self.Xprev)
         self.opti.set_initial(self.U, self.Uprev)
-        
+
         try:
-            sol = self.opti.solve()
-		
-            self.X_sol = sol.value(self.X)  # Optimal states (NX x N+1)
-            self.U_sol = sol.value(self.U)  # Optimal controls (NU x N)
+
+            sol = self.opti.solve_limited()
+
+            stats = self.opti.stats()
+
+            success = stats["success"]
+            status = stats["return_status"]
+
+            print(status)
+
+            if not success:
+                raise RuntimeError(status)
+
+            X_sol = sol.value(self.X)
+            U_sol = sol.value(self.U)
+
+            # ONLY SAVE SUCCESSFUL SOLUTIONS
+            self.Xprev = X_sol
+            self.Uprev = U_sol
+
+            self.X_sol = X_sol
+            self.U_sol = U_sol
+
+        except Exception as e:
+
+            print("MPC failed:", e)
+
+            # RESET BAD WARM START
+            self.opti.set_initial(self.X, 0)
+            self.opti.set_initial(self.U, 0)
+        
+            self.U_sol = np.zeros((self.NU, self.N))
             
-            self.latest_path = self.X_sol.copy()
-	    	
-            print(self.U_sol[:,0])
-	    	
-            self.Xprev = self.X_sol
-            self.Uprev = self.U_sol
-        
-        except RuntimeError:
-        
-            self.U_sol[:,0] = np.zeros((2,))
+            print("Timeout")
                 
 
     def transform_lidar(self, min_scan):
@@ -715,7 +736,7 @@ mpc.start_threads()
 
 def mpc_loop():
 
-    while True:
+    while np.linalg.norm(np.array([mpc.robot_x, mpc.robot_y]) - np.array([5,5])) > 3e-1:
 
         mpc.update_obstacles()
 
@@ -726,6 +747,9 @@ def mpc_loop():
         mpc.publish_control(mpc.U_sol[:, 0:3])
 
         #time.sleep(0.02)
+        
+    mpc.U_sol = np.zeros((mpc.NU, mpc.N))
+    mpc.publish_control(mpc.U_sol[:, 0:3])
 
 loop_thread = threading.Thread(
     target=mpc_loop,

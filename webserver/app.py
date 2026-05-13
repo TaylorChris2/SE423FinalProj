@@ -53,6 +53,25 @@ class NamedSemaphore:
     def acquire(self):
         self.sem.acquire()
 
+    def acquire_latest(self, timeout):
+        """
+        Wait for at least one post,
+        then drain all remaining semaphore counts by getting one.
+        """
+        # Wait until at least one update exists
+        try:
+            self.sem.acquire(timeout)
+        except posix_ipc.BusyError:
+            return False
+
+        # Drain any backlog
+        while True:
+            try:
+                self.sem.acquire(0)
+            except posix_ipc.BusyError:
+                break
+
+        return True
 
 
 waypoint_seq = 0
@@ -114,9 +133,13 @@ def update_feedback():
     global navigation_state
 
     #Updates status and position from received waypoints
-
+    print("UPDATE")
     try:
-        feedback_sem.acquire()
+        print("try")
+        
+        if not feedback_sem.acquire_latest(timeout=0.1):
+                print("timeout")
+                return
 
         data = feedback_shm.array['data'][0]
 
@@ -125,6 +148,7 @@ def update_feedback():
             float(data[1]),
             float(data[2])
         ]
+        print(robot_position)
 
         current_waypoint_index = int(data[6])
 
@@ -140,7 +164,9 @@ def update_feedback():
             navigation_state = status
 
 
-    except Exception:
+    except Exception as e:
+        print("no work")
+        print(e)
         pass
 
 
