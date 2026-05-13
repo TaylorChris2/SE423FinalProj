@@ -133,12 +133,12 @@ FEEDBACK_DTYPE = np.dtype([
 waypoint_shm = ShmRegion(
     WAYPOINT_SHM_NAME,
     WAYPOINT_DTYPE,
-    create=True
+    create=False
 )
 
 waypoint_sem = NamedSemaphore(
     WAYPOINT_SEM_NAME,
-    create=True
+    create=False
 )
 
 feedback_shm = ShmRegion(FEEDBACK_SHM_NAME, FEEDBACK_DTYPE, create=False)
