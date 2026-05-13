@@ -23,6 +23,8 @@
 #include "MatrixMath.h"
 #include "SE423Lib.h"
 #include "OptiTrack.h"
+#include "AprilTag.h"
+
 
 #define PI          3.1415926535897932384626433832795
 #define TWOPI       6.283185307179586476925286766559
@@ -92,8 +94,16 @@ volatile uint32_t errorFlag = 0;
 uint32_t numTimer0calls = 0;
 uint16_t UARTPrint = 0;
 
-float printLV1 = 0;
-float printLV2 = 0;
+float Vref1 = 0;
+float Turnref1 = 0;
+float Vref2 = 0;
+float Turnref2 = 0;
+float Vref3 = 0;
+float Turnref3 = 0;
+uint16_t dt_control = 0;
+uint16_t flag_control = 1;
+
+uint32_t control_count = 0;
 
 float printLinux1 = 0;
 float printLinux2 = 0;
@@ -123,6 +133,7 @@ extern float fromCAMvaluesThreshold2[CAMNUM_FROM_FLOATS];
 
 extern uint16_t NewCAMDataAprilTag1;  // Flag new data
 extern float fromCAMvaluesAprilTag1[CAMNUM_FROM_FLOATS];
+
 
 float tagid = 0;
 float tagx = 0;
@@ -276,8 +287,7 @@ int16_t dan28027adc1 = 0;
 int16_t dan28027adc2 = 0;
 uint16_t MPU9250ignoreCNT = 0;  //This is ignoring the first few interrupts if ADCC_ISR and start sending to IMU after these first few interrupts.
 
-void main(void)
-{
+void main(void) {
     // PLL, WatchDog, enable Peripheral Clocks
     // This example function is found in the F2837xD_SysCtrl.c file.
     InitSysCtrl();
@@ -475,6 +485,7 @@ void main(void)
     x_pred[0][0] = ROBOTps.x; //estimate in structure form (useful elsewhere)
     x_pred[1][0] = ROBOTps.y;
     x_pred[2][0] = ROBOTps.theta;
+    April_Init();
 
     AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  //clear interrupt flag
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
@@ -484,7 +495,8 @@ void main(void)
     EPwm4Regs.TBCTL.bit.CTRMODE = 0; //unfreeze, and enter up count mode
 	
     init_serialSCIA(&SerialA,115200);
-    init_serialSCID(&SerialD,2083332);
+//    init_serialSCID(&SerialD,2083332);
+    init_serialSCID(&SerialD,115200);
 
     // Enable global Interrupts and higher priority real-time debug events
     EINT;  // Enable Global interrupt INTM
@@ -589,16 +601,17 @@ void main(void)
     // IDLE loop. Just sit and loop forever (optional):
     while(1)
     {
-        if (UARTPrint == 1 ) {
+        if ( UARTPrint == 1 ) {
 
             if (readbuttons() == 0) {
                 UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);				
 //                UART_printfLine(1,"x:%.2f:y:%.2f:a%.2f",ROBOTps.x,ROBOTps.y,ROBOTps.theta);
-                UART_printfLine(2,"F%.4f R%.4f",LADARfront,LADARrightfront);
+//                UART_printfLine(2,"F%.4f R%.4f",LADARfront,LADARrightfront);
+                UART_printfLine(2,"Sent: %.3f, %.3f", fromLVvalues[0], fromLVvalues[1]);
             } else if (readbuttons() == 1) {
                 UART_printfLine(1,"O1A:%.0fC:%.0fR:%.0f",MaxAreaThreshold1,MaxColThreshold1,MaxRowThreshold1);
                 UART_printfLine(2,"P1A:%.0fC:%.0fR:%.0f",MaxAreaThreshold2,MaxColThreshold2,MaxRowThreshold2);
-				//UART_printfLine(1,"LV1:%.3f LV2:%.3f",printLV1,printLV2);
+				//UART_printfLine(1,"LV1:%.3f LV2:%.3f",Vref1,Turnref1);
                 //UART_printfLine(2,"Ln1:%.3f Ln2:%.3f",printLinux1,printLinux2);
             } else if (readbuttons() == 2) {
                 UART_printfLine(1,"O2A:%.0fC:%.0fR:%.0f",NextLargestAreaThreshold1,NextLargestColThreshold1,NextLargestRowThreshold1);
@@ -623,8 +636,9 @@ void main(void)
 				UART_printfLine(1,"D1 %ld D2 %ld",dis_1,dis_2);
                 UART_printfLine(2,"St1 %ld St2 %ld",measure_status_1,measure_status_2);
             } else if (readbuttons() == 7) {
-                UART_printfLine(1,"%.0f,%.1f,%.1f,%.1f",tagid,tagx,tagy,tagz);
-                UART_printfLine(2,"%.1f,%.1f,%.1f",tagthetax,tagthetay,tagthetaz);
+
+                UART_printfLine(1,"%.0f,%.2f,%.2f,%.2f",tagid,tagx,tagy,tagz);
+                UART_printfLine(2,"ax%.2f ay%.2f th%.2f", april_robot_x, april_robot_y, april_robot_theta * 180.0f / PI);
             }
 
             UARTPrint = 0;
@@ -763,6 +777,27 @@ void setF28027EPWM2A(float controleffort){
     float value = (controleffort+10)*3000.0/20.0;
     EPwm2A_F28027 = (int16_t)value;  // Set global variable that is sent over SPI to F28027
 }
+
+
+/**
+ * These are the command definitions for waypoint loading so the program knows where it is
+ */
+
+#define WAYPOINT_START 999.0
+#define WAYPOINT_MIDDLE 888.0
+#define WAYPOINT_END 777.0
+
+/**
+ * Enum to hold state of mode when receiving data from LV memory
+ */
+typedef enum {
+    LV_MODE_CONTROL = 0,
+    LV_MODE_WAYPOINT_LOAD = 1
+} LVMode_t;
+
+LVMode_t lv_mode = LV_MODE_CONTROL;
+
+uint16_t waypoint_index = 0;
 
 //
 // Connected to PIEIER12_9 (use MINT12 and MG12_9 masks):
@@ -925,6 +960,16 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
             tagid = fromCAMvaluesAprilTag1[6];
 
+            April_ComputeRobotPose2D(
+                tagid,
+                tagx,
+                tagy,
+                tagz,
+                tagthetax,
+                tagthetay,
+                tagthetaz
+            );
+
             numtag++;
             if ((numtag % 5) == 0) {
                 // LED2 is GPIO94
@@ -933,15 +978,56 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         }
 		
         if (NewLVData == 1) {
+
+            /**
+             * Receives data from the webserver astar waypoints AND MPC, must determine which is which
+             *
+             * Normally, update 3 control values, but if we receive a flag to start receiving waypoints, switch to that mode.
+             */
+
             NewLVData = 0;
-            printLV1 = fromLVvalues[0];
-            printLV2 = fromLVvalues[1];
-            //?? = fromLVvalues[2];
-            //?? = fromLVvalues[3];
-            //?? = fromLVvalues[4];
-            //?? = fromLVvalues[5];
-            //?? = fromLVvalues[6];
-            //?? = fromLVvalues[7];
+
+            // interperet the first value as a int to see if its a valid command, if not this is a vref value and will be handleed in jordans code
+            uint16_t command = (uint16_t)fromLVvalues[0];
+
+            // Receive flag to start loading up the waypoints
+            if (command == WAYPOINT_START) {
+
+                lv_mode = LV_MODE_WAYPOINT_LOAD;
+                waypoint_index = 0;
+            }
+
+            // We reached the end of the waypoint array, we gotta switch over to jordans mode now
+            else if (command == WAYPOINT_END) {
+
+                lv_mode = LV_MODE_CONTROL;
+                statePos = 0;
+            }
+
+            // Fill the actual waypoint array
+            else if (lv_mode == LV_MODE_WAYPOINT_LOAD) {
+
+                if (waypoint_index < NUMWAYPOINTS) {
+
+                    robotdest[waypoint_index].x = fromLVvalues[0];
+                    robotdest[waypoint_index].y = fromLVvalues[1];
+
+                    waypoint_index++;
+                }
+            }
+
+            // Normal operation in LV_MODE_CONTROL, just do jordans control data
+            else {
+                Vref1 = fromLVvalues[0];
+                Turnref1 = fromLVvalues[1];
+                Vref2 = fromLVvalues[2];
+                Turnref2 = fromLVvalues[3];
+                Vref3 = fromLVvalues[4];
+                Turnref3 = fromLVvalues[5];
+                flag_control = fromLVvalues[6];
+                dt_control = fromLVvalues[7];
+                flag_control = 1;
+            }
         }
 
 
@@ -1004,22 +1090,35 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             statePos = (statePos+1)%NUMWAYPOINTS;
         }
         // state machine
+
+        // States are:
+
+        // 1: Navigate
+        // 10: Relocalize with wall follow?? - idk
+        // 20: April tag vision
+        // TODO: Arrived state? Before start state (when no states have been received)?
+
         switch (RobotState) {
         case 1:
 
             // vref and turn are the vref and turn returned from xy_control
 
-            if (LADARfront < 1.2) {
-                vref = 0.2;
-                checkfronttally++;
-                if (checkfronttally > 310) { // check if LADARfront < 1.2 for 310ms or 3 LADAR samples
-                    RobotState = 10; // Wall follow
-                    WallFollowtime = 0;
-                    right_wall_follow_state = 1;
-                }
-            } else {
-                checkfronttally = 0;
+            if (flag_control == 1) {
+                control_count = 0;
+                flag_control = 0;
             }
+
+            if (control_count < dt_control) {
+                vref = Vref1;
+                turn = Turnref1;
+            } else if (control_count < 2 * dt_control) {
+                vref = Vref2;
+                turn = Turnref2;
+            } else {
+                vref = Vref3;
+                turn = Turnref3;
+            }
+            control_count++;
 
             break;
         case 10:
@@ -1074,8 +1173,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             DataToLabView.floatData[0] = ROBOTps.x;
             DataToLabView.floatData[1] = ROBOTps.y;
             DataToLabView.floatData[2] = ROBOTps.theta;
-            DataToLabView.floatData[3] = (float)timecount;
-            DataToLabView.floatData[4] = 0.5*(LeftVel + RightVel);
+            DataToLabView.floatData[3] = 5.0;
+            DataToLabView.floatData[4] = 5.0;
             DataToLabView.floatData[5] = (float)RobotState;
             DataToLabView.floatData[6] = (float)statePos;
             DataToLabView.floatData[7] = LADARfront;
@@ -1413,3 +1512,4 @@ __interrupt void can_isr(void)
     InterruptclearACKGroup(INTERRUPT_ACK_GROUP9);
 }
 // ----- code for CAN end here -----
+

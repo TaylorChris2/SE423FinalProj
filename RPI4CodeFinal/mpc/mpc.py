@@ -12,19 +12,37 @@ from collections import deque
 from multiprocessing import shared_memory
 from dynamics import EOM_kin_ca
 
-SEM_MUTEX_NAME = "sem-new-ladar-dist"
-SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
+import matplotlib.animation as animation
+from matplotlib.patches import Circle
+
+LIDAR_SEM_MUTEX_NAME = "sem-new-ladar-dist"
+LIDAR_SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
+ODOM_SEM_MUTEX_NAME = "sem-LVCOMApp-sendto"
+ODOM_SHARED_MEM_NAME = "sharedmem-LVCOMApp-sendto"
+CONTROL_SEM_MUTEX_NAME = "sem-LVCOMApp-readfrom"
+CONTROL_SHARED_MEM_NAME = "sharedmem-LVCOMApp-readfrom"
 
 N_BEAMS = 228
 ODOM_DTYPE = np.dtype([
-    ('x',         '<f8'),   # 8
-    ('y',         '<f8'),   # 8
-    ('theta',     '<f8'),   # 8  → 40 bytes
-    ('w_x',     '<f8'),   # 8  → 40 bytes
-    ('w_y',     '<f8'),   # 8  → 40 bytes
+    ('x', '<f4'),
+    ('y', '<f4'),
+    ('theta', '<f4'),
+    ('w_x', '<f4'),
+    ('w_y', '<f4'),
+    ('unused', '<f4', (3,)),   # remaining LV floats
 ])
 LIDAR_DTYPE = np.dtype([
     ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
+])
+CONTROL_DTYPE = np.dtype([
+    ('Vref1', '<f4'),
+    ('Turnref1', '<f4'),
+    ('Vref2', '<f4'),
+    ('Turnref2', '<f4'),
+    ('Vref3', '<f4'),
+    ('Turnref3', '<f4'),
+    ('flag', '<u4'),
+    ('dt', '<f4'),
 ])
 
 class ShmRegion:
@@ -41,6 +59,9 @@ class ShmRegion:
             self.shm = shared_memory.SharedMemory(name=name, create=True, size=size)
         else:
             self.shm = shared_memory.SharedMemory(name=name, create=False)
+        print("shm name:", self.name)
+        print("dtype size:", dtype.itemsize)
+        print("shm size:", self.shm.size)
         self.array = np.ndarray((1,), dtype=dtype, buffer=self.shm.buf)
     def close(self):
         try: self.shm.close()
@@ -153,7 +174,7 @@ class OdomReader(threading.Thread):
                 continue
             x = float(view['x'][0])
             y = float(view['y'][0])
-            theta = float(view['theta'[0]])
+            theta = float(view['theta'][0])
             w_x = float(view['w_x'][0])
             w_y = float(view['w_y'][0])
             self.received += 1
@@ -168,43 +189,60 @@ class OdomReader(threading.Thread):
         
 class MPC:
 
-    def __init__(self, lidar_shm_name: str, lidar_sem_name: str, odom_shm_name: str, odom_sem_name: str):
+    def __init__(self, lidar_shm_name: str, lidar_sem_name: str, odom_shm_name: str, odom_sem_name: str, control_shm_name: str, control_sem_name: str):
         self.opti = ca.Opti()
 
         self.NX = 3
         self.NU = 2
         self.N = 20
         self.dt = 0.25
-        self.r = 0.05
 
         # Control bounds
-        self.v_l_max = 0.1
-        self.v_r_max = 0.1
-        self.du_max = 0.1
+        self.v_max = 2
+        self.omega_max = 2
+        self.du_max = 10
 
         # Cost matrices
-        self.Q = ca.diag(ca.DM([1000.0, 1000.0, 10.0]))
-        self.R = ca.diag(ca.DM([5, 5]))
+        self.Q = ca.diag(ca.DM([50.0, 50.0, 10.0]))
+        self.R = ca.diag(ca.DM([10, 50]))
         
         # Obstacle inflation radius and cost weight
-        self.safe_radius = 0.1
-        self.obst_alpha = 1e-3
-        self.max_obsts = 1
+        self.safe_radius = 1 #ft
+        self.obst_alpha = 1e1
+        self.max_obsts = 5
         self.lidar_deg_res = 1.05 #deg
         self.lidar_zero_idx = 113
         self.lidar_offset = 0
+        self.lidar_tol = 5
+        
+        # Initial pose
+        self.robot_x = 0
+        self.robot_y = 0
+        self.robot_theta = 0
+        self.Xprev = np.zeros((self.NX, self.N + 1))
+        self.Uprev = np.zeros((self.NU, self.N))
+        self.X_sol = np.zeros((self.NX, self.N + 1))
+        self.U_sol = np.zeros((self.NU, self.N))
+        
+        # Visualization state
+        self.latest_obstacles = np.zeros((2, self.max_obsts))
+        self.latest_path = np.zeros((self.NX, self.N + 1))
 
         # Shared memory and semaphore args
         self.lidar_shm_name = lidar_shm_name
         self.lidar_sem_name = lidar_sem_name
         self.odom_shm_name = odom_shm_name
         self.odom_sem_name = odom_sem_name
+        self.control_shm_name = control_shm_name
+        self.control_sem_name = control_sem_name
 
         self.init_threads()
         self.mpc_setup_problem()
 
     def init_threads(self):
         
+        self.seq_counter = 0
+
         self.lidar_shm = ShmRegion(self.lidar_shm_name, LIDAR_DTYPE, create=False)
         self.lidar_sem = NamedSemaphore(self.lidar_sem_name)
         self.lidar_q   = queue.LifoQueue(maxsize=4)
@@ -216,10 +254,13 @@ class MPC:
         self.lidar_reader = LidarReader(self.lidar_shm, self.lidar_sem, self.lidar_q)
         self.odom_reader  = OdomReader(self.odom_shm, self.odom_sem, self.odom_q)
         self._stop = threading.Event()
+        
+        self.control_shm  = ShmRegion(self.control_shm_name,  CONTROL_DTYPE,  create=False)
+        self.control_sem  = NamedSemaphore(self.control_sem_name)
     
     def start_threads(self):
         self.lidar_reader.start()
-        self.odom_read.start()
+        self.odom_reader.start()
     
     def stop_threads(self):
         self._stop.set()
@@ -248,7 +289,7 @@ class MPC:
 
         # Dynamics constraints
         for k in range(self.N):
-            A, B = EOM_kin_ca(self.X[:, k], self.dt, self.r)
+            A, B = EOM_kin_ca(self.X[:, k], self.dt)
             x_next = ca.mtimes([A, self.X[:, k]]) + ca.mtimes([B, self.U[:, k]])
             self.opti.subject_to(self.X[:, k + 1] == x_next)
 
@@ -256,8 +297,8 @@ class MPC:
         self.opti.subject_to(self.X[:, 0] == self.x0)
 
         # Control bounds
-        self.opti.subject_to(self.opti.bounded(-self.v_l_max, self.U[0, :], self.v_l_max))
-        self.opti.subject_to(self.opti.bounded(-self.v_r_max, self.U[1, :], self.v_r_max))
+        self.opti.subject_to(self.opti.bounded(-self.v_max, self.U[0, :], self.v_max))
+        self.opti.subject_to(self.opti.bounded(-self.omega_max, self.U[1, :], self.omega_max))
         for k in range(self.N-1):    
             delta = self.U[:, k+1] - self.U[:, k]         # 2x1    
             self.opti.subject_to(self.opti.bounded(-self.du_max, delta / self.dt, self.du_max))
@@ -275,7 +316,7 @@ class MPC:
         for k in range(self.N + 1):
             # Robot position at timestep k: (2 x 1)
             pos_k = self.X[:2, k]  # shape (2,)
-            # Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
+            #Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
             diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
             # Squared distances: (1 x obst_num)
             dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
@@ -289,12 +330,15 @@ class MPC:
 
         # Configure solver
         solver_opts = {
-            "ipopt.max_iter": 1e3,
-            "ipopt.tol": 1e-4,
-            "ipopt.print_level": 0,
+            "ipopt.max_iter": 20,
+            "ipopt.tol": 1e-3,
+            "ipopt.print_level": 5,
             "ipopt.linear_solver": "mumps",
             "ipopt.mu_strategy": "adaptive",
             "ipopt.warm_start_init_point": "yes",
+            "ipopt.max_wall_time": 1.5
+            #"print_time": 0,
+            #"ipopt.sb": "yes",
             # "ipopt.warm_start_mult_bound_push": 1e-6
         }
         self.opti.solver("ipopt", solver_opts)
@@ -302,30 +346,116 @@ class MPC:
     def update_obstacles(self):
         
         try:
-            scan = self.lidar_q.get(timeout=0.1)[1:-1]
+            scan = self.lidar_q.get(timeout=0.1)[self.lidar_tol:-self.lidar_tol]
+            scan = scan / 1000 * 3.28084
 
-            close_scan_idx = np.where(scan < 200000)
+            #close_scan_idx = np.where(scan < 2)
             #print(close_scan_idx)
-            close_scan = scan[close_scan_idx]
+            #close_scan = scan[close_scan_idx]
 
-            if len(close_scan) == 0:
-                return
+            #if len(close_scan) == 0:
+                #return
 
-            k = min(self.max_obsts, len(close_scan))
+            #k = min(self.max_obsts, len(scan))
 
-            idx = np.argpartition(close_scan, k - 1)[:k]
-            print(idx)
-            min_scan = close_scan[idx]
+            #min_scan = []
+            #idx = []
+            #for i in range(k):
+                #min_scan.append(min(scan))
+                #idx.append(np.argmin(scan))
 
-            min_scan_xy = np.zeros((2, self.max_obsts))
+            #min_scan_xy = np.full((2, self.max_obsts), 1e1)
 
-            for i in range(k):
-                theta = np.deg2rad(self.lidar_deg_res * (idx[i] - self.lidar_zero_idx))
-                min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
-                min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
-            print(min_scan_xy)
+            #for i in range(k):
+                #theta = np.deg2rad(self.lidar_deg_res * (idx[i] - self.lidar_zero_idx))
+                #min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
+                #min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
+            #print(min_scan_xy)
+            #min_scan_xy = self.transform_lidar(min_scan_xy)
+            #print(min_scan_xy)
+            
+            #self.latest_obstacles = min_scan_xy.copy()
+            
+            #self.opti.set_value(self.obst_pos, min_scan_xy)
+            
+            # =========================
+            # VALID RETURNS ONLY
+            # =========================
+            valid = np.isfinite(scan) & (scan > 0.05)
+
+            valid_idx = np.where(valid)[0]
+            valid_scan = scan[valid]
+
+            # =========================
+            # SORT BY DISTANCE
+            # =========================
+            sorted_order = np.argsort(valid_scan)
+
+            candidate_idx = valid_idx[sorted_order]
+            candidate_scan = valid_scan[sorted_order]
+
+            # =========================
+            # GREEDY SPATIAL FILTER
+            # =========================
+            selected_points = []
+            selected_idx = []
+
+            min_spacing = self.safe_radius * 3/4
+
+            for i in range(len(candidate_scan)):
+
+                r = candidate_scan[i]
+
+                theta = np.deg2rad(
+                    self.lidar_deg_res *
+                    (candidate_idx[i] - self.lidar_zero_idx)
+                )
+
+                # Local-frame lidar point
+                px = r * np.cos(theta)
+                py = r * np.sin(theta)
+
+                candidate_pt = np.array([px, py])
+
+                # Always keep first point
+                if len(selected_points) == 0:
+                    selected_points.append(candidate_pt)
+                    selected_idx.append(i)
+                    continue
+
+                # Distance to previously selected points
+                keep = True
+
+                for prev_pt in selected_points:
+
+                    d = np.linalg.norm(candidate_pt - prev_pt)
+
+                    if d < min_spacing:
+                        keep = False
+                        break
+
+                if keep:
+                    selected_points.append(candidate_pt)
+                    selected_idx.append(i)
+
+                if len(selected_points) >= self.max_obsts:
+                    break
+
+            # =========================
+            # BUILD OBSTACLE ARRAY
+            # =========================
+            min_scan_xy = np.full((2, self.max_obsts), 1e6)
+
+            for i, pt in enumerate(selected_points):
+
+                min_scan_xy[0, i] = pt[0]
+                min_scan_xy[1, i] = pt[1]
+
+            # Transform to world frame
             min_scan_xy = self.transform_lidar(min_scan_xy)
-            print(min_scan_xy)
+
+            self.latest_obstacles = min_scan_xy.copy()
+
             self.opti.set_value(self.obst_pos, min_scan_xy)
             
         except queue.Empty:
@@ -334,6 +464,7 @@ class MPC:
     def update_robot_pose_and_waypoints(self):
         try:
             data = self.odom_q.get(timeout=0.1)
+            #print(data)
 
             self.robot_x = data[0]
             self.robot_y = data[1]
@@ -342,13 +473,53 @@ class MPC:
             self.waypoint_y = data[4]
 
             self.opti.set_value(self.x0, np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
+            #print("Set x0 to", np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
             self.opti.set_value(self.xd, np.array([self.waypoint_x, self.waypoint_y, 0.0]).reshape(3,1))
 
         except queue.Empty:
             pass
 
     def solve_mpc(self):
-        pass
+
+        self.opti.set_initial(self.X, self.Xprev)
+        self.opti.set_initial(self.U, self.Uprev)
+
+        try:
+
+            sol = self.opti.solve_limited()
+
+            stats = self.opti.stats()
+
+            success = stats["success"]
+            status = stats["return_status"]
+
+            print(status)
+
+            if not success:
+                raise RuntimeError(status)
+
+            X_sol = sol.value(self.X)
+            U_sol = sol.value(self.U)
+
+            # ONLY SAVE SUCCESSFUL SOLUTIONS
+            self.Xprev = X_sol
+            self.Uprev = U_sol
+
+            self.X_sol = X_sol
+            self.U_sol = U_sol
+
+        except Exception as e:
+
+            print("MPC failed:", e)
+
+            # RESET BAD WARM START
+            self.opti.set_initial(self.X, 0)
+            self.opti.set_initial(self.U, 0)
+        
+            self.U_sol = np.zeros((self.NU, self.N))
+            
+            print("Timeout")
+                
 
     def transform_lidar(self, min_scan):
 
@@ -359,61 +530,234 @@ class MPC:
         min_scan_world = R @ min_scan + lidar_origin
         return min_scan_world
 
+    def publish_control(self, U: np.ndarray):
+        shm = self.control_shm
+        sem = self.control_sem
+        
+        view = shm.array
+        U = U.astype(np.float32)
+        #print(U)
+        
+        view["Vref1"][0] = float(U[0,0])
+        view["Turnref1"][0] = -float(U[1,0])
+        view["Vref2"][0] = float(U[0,1])
+        view["Turnref2"][0] = -float(U[1,1])
+        view["Vref3"][0] = float(U[0,2])
+        view["Turnref3"][0] = -float(U[1,2])
+        print(view)
+
+        # write sequence last so readers see a consistent frame
+        self.seq_counter += 1
+        view['flag'][0] = 1
+        
+        view['dt'][0] = int(1000 * self.dt)
+
+        # notify readers
+        sem.release()   # or sem.post() depending on your NamedSemaphore API
+
+    def start_animation(self):
+
+        self.fig, self.ax = plt.subplots(figsize=(10, 10))
+
+        # MPC path line
+        self.path_line, = self.ax.plot(
+            [], [],
+            'b-',
+            linewidth=2,
+            label='MPC Path'
+        )
+
+        # Robot current position
+        self.robot_point, = self.ax.plot(
+            [], [],
+            'ko',
+            markersize=10,
+            label='Robot'
+        )
+
+        # Goal point
+        self.goal_point, = self.ax.plot(
+            [], [],
+            'gx',
+            markersize=12,
+            markeredgewidth=3,
+            label='Goal'
+        )
+
+        # Robot heading line
+        self.heading_line, = self.ax.plot(
+            [],
+            [],
+            'k-',
+            linewidth=2
+        )
+
+        # Obstacle scatter
+        self.obstacle_scatter = self.ax.scatter(
+            [],
+            [],
+            c='r',
+            s=40,
+            label='Obstacles'
+        )
+
+        # Inflation circles
+        self.obstacle_circles = []
+
+        self.ax.set_xlim(-10, 10)
+        self.ax.set_ylim(-10, 10)
+
+        self.ax.set_xlabel("X [ft]")
+        self.ax.set_ylabel("Y [ft]")
+
+        self.ax.set_title("Real-Time MPC + Lidar Visualization")
+
+        self.ax.grid(True)
+        self.ax.legend()
+
+        self.ax.set_aspect('equal')
+
+        self.anim = animation.FuncAnimation(
+            self.fig,
+            self.update_animation,
+            interval=50,
+            blit=False,
+            cache_frame_data=False
+        )
+
+        plt.show()
+        
+    def update_animation(self, frame):
+
+        # =========================
+        # MPC PATH
+        # =========================
+        path = self.latest_path
+
+        self.path_line.set_data(
+            path[0, :],
+            path[1, :]
+        )
+
+        # =========================
+        # ROBOT POSITION
+        # =========================
+        self.robot_point.set_data(
+            [self.robot_x],
+            [self.robot_y]
+        )
+
+        # =========================
+        # GOAL POSITION
+        # =========================
+        self.goal_point.set_data(
+            [self.waypoint_x],
+            [self.waypoint_y]
+        )
+
+        # =========================
+        # ROBOT HEADING
+        # =========================
+        heading_len = 0.75
+
+        hx = self.robot_x + heading_len * np.cos(self.robot_theta)
+        hy = self.robot_y + heading_len * np.sin(self.robot_theta)
+
+        self.heading_line.set_data(
+            [self.robot_x, hx],
+            [self.robot_y, hy]
+        )
+
+        # =========================
+        # OBSTACLES
+        # =========================
+        obst = self.latest_obstacles
+
+        self.obstacle_scatter.set_offsets(
+            obst.T
+        )
+
+        # Remove old circles
+        for circ in self.obstacle_circles:
+            circ.remove()
+
+        self.obstacle_circles = []
+
+        # Draw inflation circles
+        for i in range(obst.shape[1]):
+
+            ox = obst[0, i]
+            oy = obst[1, i]
+
+            if ox == 0 and oy == 0:
+                continue
+
+            circ = Circle(
+                (ox, oy),
+                self.safe_radius,
+                color='r',
+                fill=False,
+                alpha=0.4,
+                linewidth=1.5
+            )
+
+            self.ax.add_patch(circ)
+            self.obstacle_circles.append(circ)
+
+        # =========================
+        # AUTO-SCALE VIEW
+        # =========================
+        all_x = [self.robot_x, self.waypoint_x]
+        all_y = [self.robot_y, self.waypoint_y]
+
+        if obst.size > 0:
+            all_x.extend(obst[0, :])
+            all_y.extend(obst[1, :])
+
+        margin = 3
+
+        self.ax.set_xlim(min(all_x) - margin, max(all_x) + margin)
+        self.ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
+
+        return (
+            self.path_line,
+            self.robot_point,
+            self.goal_point,
+            self.heading_line,
+            self.obstacle_scatter
+        )
 
 x_next = np.array([0, 0, 0])
 x_d = np.array([1, 0.5, np.pi/4])
 
-mpc = MPC(SHARED_MEM_NAME, SEM_MUTEX_NAME)
-
-first_iter = True
-iter_count = 1
-X_opt = np.zeros((mpc.NX, mpc.N + 1))
-
-x_total = [x_next]
-u_total = [np.array([0,0])]
-
-start = time.time()
+mpc = MPC(LIDAR_SHARED_MEM_NAME, LIDAR_SEM_MUTEX_NAME, ODOM_SHARED_MEM_NAME, ODOM_SEM_MUTEX_NAME, CONTROL_SHARED_MEM_NAME, CONTROL_SEM_MUTEX_NAME)
 
 mpc.start_threads()
 
-while np.linalg.norm(x_next[0:2] - x_d[0:2]) > 3e-2 and iter_count <= 1e2:
+def mpc_loop():
 
+    while np.linalg.norm(np.array([mpc.robot_x, mpc.robot_y]) - np.array([5,5])) > 3e-1:
 
-    mpc.update_obstacles()
-    mpc.update_robot_pose_and_waypoints()
-    time.sleep(0.33)
-    '''print(iter_count)
+        mpc.update_obstacles()
 
-    if first_iter:
-        # Set initial state and reference
-        mpc.opti.set_value(mpc.x0, np.array([0, 0, 0]))  # Initial state
-        mpc.opti.set_value(mpc.xd, x_d)  # Reference state
-        first_iter = False
-    else:
-        # Set initial state and reference
-        mpc.opti.set_value(mpc.x0, x_next)  # Initial state
-        mpc.opti.set_value(mpc.xd, x_d)  # Reference state
-        mpc.opti.set_initial(mpc.X, X_opt)
-        mpc.opti.set_initial(mpc.U, U_opt)
+        mpc.update_robot_pose_and_waypoints()
 
-    # obst_pos[1] -= 0.01 * iter_count
-    mpc.opti.set_value(mpc.obst_pos, obst_pos.T)
+        mpc.solve_mpc()
 
-    # Solve
-    sol = mpc.opti.solve()
+        mpc.publish_control(mpc.U_sol[:, 0:3])
 
-    # Extract solution
-    X_opt = sol.value(mpc.X)  # Optimal states (NX x N+1)
-    U_opt = sol.value(mpc.U)  # Optimal controls (NU x N)
+        #time.sleep(0.02)
+        
+    mpc.U_sol = np.zeros((mpc.NU, mpc.N))
+    mpc.publish_control(mpc.U_sol[:, 0:3])
 
+loop_thread = threading.Thread(
+    target=mpc_loop,
+    daemon=True
+)
 
-    # A, B = EOM_kin(x_next, mpc.dt, mpc.r)
-    # x_next = A @ x_next + B @ U_opt[:, 0]
-    x_next = mpc._rk4_np(x_next, U_opt[:,0])
-    print(x_next)
-    
-    iter_count += 1
-    
-    print(np.linalg.norm(x_next[0:2] - x_d[:,-1][0:2]))
-    x_total.append(x_next)
-    u_total.append(U_opt[:, 0])'''
+loop_thread.start()
+
+# Start visualization
+mpc.start_animation()
+
