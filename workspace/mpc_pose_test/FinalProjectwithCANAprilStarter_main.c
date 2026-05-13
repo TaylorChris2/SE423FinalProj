@@ -23,6 +23,8 @@
 #include "MatrixMath.h"
 #include "SE423Lib.h"
 #include "OptiTrack.h"
+#include "AprilTag.h"
+
 
 #define PI          3.1415926535897932384626433832795
 #define TWOPI       6.283185307179586476925286766559
@@ -131,6 +133,7 @@ extern float fromCAMvaluesThreshold2[CAMNUM_FROM_FLOATS];
 
 extern uint16_t NewCAMDataAprilTag1;  // Flag new data
 extern float fromCAMvaluesAprilTag1[CAMNUM_FROM_FLOATS];
+
 
 float tagid = 0;
 float tagx = 0;
@@ -482,6 +485,7 @@ void main(void) {
     x_pred[0][0] = ROBOTps.x; //estimate in structure form (useful elsewhere)
     x_pred[1][0] = ROBOTps.y;
     x_pred[2][0] = ROBOTps.theta;
+    April_Init();
 
     AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  //clear interrupt flag
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
@@ -597,7 +601,7 @@ void main(void) {
     // IDLE loop. Just sit and loop forever (optional):
     while(1)
     {
-        if (UARTPrint == 1 ) {
+        if ( UARTPrint == 1 ) {
 
             if (readbuttons() == 0) {
                 UART_printfLine(1,"Vrf:%.2f trn:%.2f",vref,turn);				
@@ -632,8 +636,9 @@ void main(void) {
 				UART_printfLine(1,"D1 %ld D2 %ld",dis_1,dis_2);
                 UART_printfLine(2,"St1 %ld St2 %ld",measure_status_1,measure_status_2);
             } else if (readbuttons() == 7) {
-                UART_printfLine(1,"%.0f,%.1f,%.1f,%.1f",tagid,tagx,tagy,tagz);
-                UART_printfLine(2,"%.1f,%.1f,%.1f",tagthetax,tagthetay,tagthetaz);
+
+                UART_printfLine(1,"%.0f,%.2f,%.2f,%.2f",tagid,tagx,tagy,tagz);
+                UART_printfLine(2,"ax%.2f ay%.2f th%.2f", april_robot_x, april_robot_y, april_robot_theta * 180.0f / PI);
             }
 
             UARTPrint = 0;
@@ -933,6 +938,16 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             tagthetaz = fromCAMvaluesAprilTag1[5];
 
             tagid = fromCAMvaluesAprilTag1[6];
+
+            April_ComputeRobotPose2D(
+                tagid,
+                tagx,
+                tagy,
+                tagz,
+                tagthetax,
+                tagthetay,
+                tagthetaz
+            );
 
             numtag++;
             if ((numtag % 5) == 0) {
@@ -1428,3 +1443,4 @@ __interrupt void can_isr(void)
     InterruptclearACKGroup(INTERRUPT_ACK_GROUP9);
 }
 // ----- code for CAN end here -----
+
