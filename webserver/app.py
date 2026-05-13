@@ -159,6 +159,8 @@ def update_feedback():
 
 def sendWaypoints(waypoints):
 
+    print("SEND START")
+
     global waypoint_seq
 
     total = len(waypoints)
