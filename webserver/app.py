@@ -137,7 +137,7 @@ def update_feedback():
     try:
         print("try")
         
-        if not feedback_sem.acquire_latest(timeout=0.1):
+        if not feedback_sem.sem.acquire(timeout=0.1):
                 print("timeout")
                 return
 
