@@ -279,6 +279,14 @@ int16_t calibration_state = 0;
 int32_t calibration_count = 0;
 int16_t doneCal = 0;
 
+//new case global variables
+uint16_t waypointX = 0;
+uint16_t waypointY = 0;
+uint16_t mpcSwitch = 0;
+float xdist = 0;
+float ydist = 0;
+float edist = 0;
+
 #define MPU9250 1
 #define DAN28027 2
 int16_t CurrentChip = MPU9250;
@@ -1096,6 +1104,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         // 1: Navigate
         // 10: Relocalize with wall follow?? - idk
         // 20: April tag vision
+        // 30: decide what waypoints to send
+        // 40: decide when to use mpc
         // TODO: Arrived state? Before start state (when no states have been received)?
 
         switch (RobotState) {
@@ -1154,6 +1164,21 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         case 20:
             // put vision code here
             break;
+
+        case 30:
+
+            break;
+
+        case 40:
+            xdist = robotdest[statePos].x - ROBOTps.x;
+            ydist = robotdest[statePos].y - ROBOTps.y;
+            edist = sqrt(xdist*xdist + ydist*ydist)
+            if (dist < 0.3) {
+                mpcSwitch = 1;
+            } else {
+                mpcSwitch = 0;
+            }
+            break;
         default:
             break;
         }
@@ -1173,8 +1198,12 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             DataToLabView.floatData[0] = ROBOTps.x;
             DataToLabView.floatData[1] = ROBOTps.y;
             DataToLabView.floatData[2] = ROBOTps.theta;
+            //x and y waypoints variable
+            //choose what way points to send
             DataToLabView.floatData[3] = 5.0;
             DataToLabView.floatData[4] = 5.0;
+            //variable  for when to use mpc
+            //euclidian distance
             DataToLabView.floatData[5] = (float)RobotState;
             DataToLabView.floatData[6] = (float)statePos;
             DataToLabView.floatData[7] = LADARfront;
