@@ -186,5 +186,6 @@ void April_ComputeRobotPose2D_v2(
 
     april_robot_x = d_xa * cosf(t_tot) - d_ya * sinf(t_tot) + current_tag_world_x;
     april_robot_y = d_xa * sinf(t_tot) - d_ya * cosf(t_tot) + current_tag_world_y;
+    april_robot_x = atan2(tagy - april_robot_y, tagx - april_robot_x);
 
 }

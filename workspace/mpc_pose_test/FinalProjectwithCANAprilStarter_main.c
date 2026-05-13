@@ -960,7 +960,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
             tagid = fromCAMvaluesAprilTag1[6];
 
-            April_ComputeRobotPose2D(
+            April_ComputeRobotPose2D_v2(
                 tagid,
                 tagx,
                 tagy,

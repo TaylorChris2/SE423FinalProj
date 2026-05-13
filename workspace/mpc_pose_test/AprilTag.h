@@ -29,4 +29,14 @@ void April_ComputeRobotPose2D(
     float tagthetaz
 );
 
+void April_ComputeRobotPose2D_v2(
+    float tagid,
+    float tagx,
+    float tagy,
+    float tagz,
+    float tagthetax,
+    float tagthetay,
+    float tagthetaz
+);
+
 #endif
