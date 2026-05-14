@@ -184,6 +184,7 @@ int32_t WallFollowtime = 0;
 #define NUMWAYPOINTS 8
 uint16_t statePos = 0;
 pose robotdest[NUMWAYPOINTS];  // array of waypoints for the robot
+pose start;
 uint16_t i = 0;//for loop
 
 uint16_t right_wall_follow_state = 2;  // right follow
@@ -278,6 +279,14 @@ float gyroz_offset = 0;
 int16_t calibration_state = 0;
 int32_t calibration_count = 0;
 int16_t doneCal = 0;
+
+//new case global variables
+uint16_t waypointX = 0;
+uint16_t waypointY = 0;
+uint16_t mpcSwitch = 0;
+float xdist = 0;
+float ydist = 0;
+float edist = 0;
 
 #define MPU9250 1
 #define DAN28027 2
@@ -960,7 +969,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
             tagid = fromCAMvaluesAprilTag1[6];
 
-            April_ComputeRobotPose2D(
+            April_ComputeRobotPose2D_v2(
                 tagid,
                 tagx,
                 tagy,
@@ -1011,6 +1020,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
                     robotdest[waypoint_index].x = fromLVvalues[0];
                     robotdest[waypoint_index].y = fromLVvalues[1];
+                    start = robotdest[0];
 
                     waypoint_index++;
                 }
@@ -1096,6 +1106,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         // 1: Navigate
         // 10: Relocalize with wall follow?? - idk
         // 20: April tag vision
+        // 30: decide what waypoints to send
+        // 40: decide when to use mpc
         // TODO: Arrived state? Before start state (when no states have been received)?
 
         switch (RobotState) {
@@ -1119,7 +1131,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 turn = Turnref3;
             }
             control_count++;
-
+            RobotState = 40;
             break;
         case 10:
             if (right_wall_follow_state == 1) {
@@ -1153,14 +1165,44 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
         case 20:
             // put vision code here
+            DataToLabView.floatData[0] = april_robot_x;
+            DataToLabView.floatData[1] = april_robot_y;
+            DataToLabView.floatData[2] = april_robot_theta;
+            RobotState = 40;
+            break;
+
+        case 30:
+            if (tagid >= 0) {
+                RobotState = 20;
+            }
+            statePos++;
+            DataToLabView.floatData[3] = robotdest[statePos].x;
+            DataToLabView.floatData[4] = robotdest[statePos].y;
+            RobotState = 40;
+            break;
+
+        case 40:
+            xdist = robotdest[statePos].x - ROBOTps.x;
+            ydist = robotdest[statePos].y - ROBOTps.y;
+            edist = sqrt(xdist*xdist + ydist*ydist);
+            int mpcSwitch = 0;
+            if (edist < 0.3) {
+                mpcSwitch = 1; 
+                RobotState = 30;
+            }
+            else {
+                mpcSwitch = 0;
+                RobotState = 1;
+            }
+            DataToLabView.floatData[5] = (float)mpcSwitch;
             break;
         default:
             break;
         }
 
-
         //Must be called each time into this SWI1 function
         PIcontrol(&uLeft,&uRight,vref,turn,LeftWheel,RightWheel);
+
         // These below lines also must be called each time into this SWI1 function
         setEPWM1A(uLeft);
         setEPWM2A(-uRight);
@@ -1173,9 +1215,13 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             DataToLabView.floatData[0] = ROBOTps.x;
             DataToLabView.floatData[1] = ROBOTps.y;
             DataToLabView.floatData[2] = ROBOTps.theta;
+            //x and y waypoints variable
+            //choose what way points to send
             DataToLabView.floatData[3] = 5.0;
             DataToLabView.floatData[4] = 5.0;
-            DataToLabView.floatData[5] = (float)RobotState;
+            //variable  for when to use mpc
+            //euclidian distance
+            DataToLabView.floatData[5] = (float)mpcSwitch;
             DataToLabView.floatData[6] = (float)statePos;
             DataToLabView.floatData[7] = LADARfront;
             LVsenddata[0] = '*';  // header for LVdata
@@ -1189,6 +1235,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             }
             serial_sendSCID(&SerialD, LVsenddata, 4*LVNUM_TOFROM_FLOATS + 2);
         }
+
 
     }
     timecount++;
