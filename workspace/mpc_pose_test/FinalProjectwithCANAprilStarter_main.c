@@ -284,8 +284,8 @@ int16_t doneCal = 0;
 uint16_t waypointX = 0;
 uint16_t waypointY = 0;
 uint16_t mpcSwitch = 0;
-float xdist = 0;
-float ydist = 0;
+float robDist = 0;
+float wayDist = 0;
 float edist = 0;
 
 #define MPU9250 1
@@ -1130,8 +1130,20 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 vref = Vref3;
                 turn = Turnref3;
             }
+            robDist = sqrt(ROBOTps.x*ROBOTps.x + ROBOTps.y*ROBOTps.y);
+            wayDist = sqrt(robotdest[statePos].x*robotdest[statePos].x + robotdest[statePos].y*robotdest[statePos].y);
+            edist = abs(wayDist - robDist);
+            int mpcSwitch = 0;
+            if (edist < 0.3) {
+                mpcSwitch = 0; 
+                RobotState = 30;
+            }
+            else {
+                mpcSwitch = 1;
+            }
+            DataToLabView.floatData[5] = mpcSwitch;
+
             control_count++;
-            RobotState = 40;
             break;
         case 10:
             if (right_wall_follow_state == 1) {
@@ -1168,7 +1180,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             DataToLabView.floatData[0] = april_robot_x;
             DataToLabView.floatData[1] = april_robot_y;
             DataToLabView.floatData[2] = april_robot_theta;
-            RobotState = 40;
+            RobotState = 1;
             break;
 
         case 30:
@@ -1178,24 +1190,9 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             statePos++;
             DataToLabView.floatData[3] = robotdest[statePos].x;
             DataToLabView.floatData[4] = robotdest[statePos].y;
-            RobotState = 40;
+            RobotState = 1;
             break;
-
-        case 40:
-            xdist = robotdest[statePos].x - ROBOTps.x;
-            ydist = robotdest[statePos].y - ROBOTps.y;
-            edist = sqrt(xdist*xdist + ydist*ydist);
-            int mpcSwitch = 0;
-            if (edist < 0.3) {
-                mpcSwitch = 1; 
-                RobotState = 30;
-            }
-            else {
-                mpcSwitch = 0;
-                RobotState = 1;
-            }
-            DataToLabView.floatData[5] = (float)mpcSwitch;
-            break;
+        
         default:
             break;
         }
