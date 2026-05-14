@@ -218,7 +218,7 @@ def sendWaypoints(waypoints):
         if idx == 0:
             flag = WAYPOINT_START
 
-        elif idx == total - 1:
+        elif idx == total - 1 or idx == total - 2 or idx == total - 3:
             flag = WAYPOINT_END
 
         else:
@@ -243,11 +243,12 @@ def sendWaypoints(waypoints):
         view['data7'][0] = 1  # valid marker LAST
 
         print(view)
-        print("SEM BEFORE:", waypoint_sem.sem.value)
-        time.sleep(0.01)
-        waypoint_sem.release()
-        print("SEM AFTER:", waypoint_sem.sem.value)
-        time.sleep(0.01)
+        for i in range(3):
+            print("SEM BEFORE:", waypoint_sem.sem.value)
+            time.sleep(0.001)
+            waypoint_sem.release()
+            print("SEM AFTER:", waypoint_sem.sem.value)
+            time.sleep(0.1)
 
 @app.route('/')
 def index():

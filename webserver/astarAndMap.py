@@ -178,6 +178,28 @@ def reconstruct_path(row_end, col_end, node_track):
         curr = node_track[curr]['parent']
     return path
 
+def filter_waypoints(path):
+    if len(path) <= 2:
+        return path
+
+    filtered = [path[0]] # always keep start
+
+    for i in range(1, len(path) - 1):
+        prev = path[i - 1]
+        curr = path[i]
+        nxt = path[i + 1]
+
+        dr1 = curr[0] - prev[0]
+        dc1 = curr[1] - prev[1]
+
+        dr2 = nxt[0] - curr[0]
+        dc2 = nxt[1] - curr[1]
+
+        if dr1 != dr2 or dc1 != dc2:
+            filtered.append(curr)
+
+    filtered.append(path[-1]) # always keep end
+    return filtered
 
 def path_Astar(start_room, end_room):
     if start_room not in nodes:
@@ -186,17 +208,15 @@ def path_Astar(start_room, end_room):
     if end_room not in nodes:
         print(f"Room {end_room} not available")
         return None
+
     #x,y is col,row
     col_start, row_start = nodes[start_room]
     col_end, row_end = nodes[end_room]
 
     path = astar(row_start, col_start, row_end, col_end)
-    
-    print(f"Path found: {len(path)} steps")
-    print(f"Start pixel: {path[-1]}  ->  End pixel: {path[0]}")
-    for i, (row, col) in enumerate(reversed(path)):
-        print(f"waypoint {i}: row={row}, col={col}")
-
+    if path is None:
+        return None
+    path = filter_waypoints(path)
     return path
 
 

@@ -40,7 +40,7 @@ setInterval(() => {
         updateUI();
         drawScene();
     });
-}, 100);
+}, 1000);
 
 function buttonPress() {
     if (navState === STATUS_IDLE || navState === STATUS_ARRIVED ) {
