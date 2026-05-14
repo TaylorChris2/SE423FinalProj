@@ -3,11 +3,22 @@ import cv2
 import numpy as np
 img = cv2.imread("floorplan_bw.png", cv2.IMREAD_GRAYSCALE)
 
+scale = 0.5
+
+
+img_small = cv2.resize(
+    img,
+    None,
+    fx=scale,
+    fy=scale,
+    interpolation=cv2.INTER_NEAREST
+)
+
 #converts coloration of pixel to white or black
 # Convert to binary:
 # black floor/open space = 1
 # white walls = 0
-val, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+val, binary = cv2.threshold(img_small, 127, 255, cv2.THRESH_BINARY)
 
 #boolean arrays
 walkable = binary == 0   # black pixels
@@ -18,7 +29,7 @@ meters_per_pixel = ft_per_pixel * 0.3048
 pixels_per_ft = 1 / ft_per_pixel
 
 clearance_ft = 1.5
-clearance_px = int(clearance_ft / ft_per_pixel)
+clearance_px = int((clearance_ft / ft_per_pixel) * scale)
 
 kernel = np.ones((clearance_px, clearance_px), np.uint8)
 
@@ -27,6 +38,32 @@ inflated_walls = cv2.dilate(walls_uint8, kernel, iterations=1)
 
 #boolean array with True False values
 walkable_safe = inflated_walls == 0
+
+# Distance from every free pixel to nearest wall
+dist_to_wall = cv2.distanceTransform(
+    walkable_safe.astype(np.uint8),
+    cv2.DIST_L2,
+    5
+)
+
+dist_to_wall = dist_to_wall.astype(np.float32)
+
+# Avoid divide-by-zero
+dist_to_wall[dist_to_wall < 1.0] = 1.0
+
+import math
+
+def movement_cost(r1, c1, r2, c2):
+    diagonal = (r1 != r2) and (c1 != c2)
+
+    base = math.sqrt(2) if diagonal else 1.0
+
+    d = dist_to_wall[r2, c2]
+
+    wall_penalty = 3.0 / d
+
+    return base + wall_penalty
+
 
 nodes = {
     "3080": (962, 690),
@@ -69,6 +106,13 @@ nodes = {
     "3051": (1130, 223),
 }
 
+nodes_small = {
+    k: (
+        int(v[0] * scale),
+        int(v[1] * scale)
+    )
+    for k, v in nodes.items()
+}
 maze = [
     'x','0','0','x','x','x','x','x','x','x','x',
     '0','0','0','0','x','x','0','x','x','0','x',
@@ -90,7 +134,7 @@ maze = [
 
 #Manhattan distance, far current cell from goal
 def heuristic(row_curr, col_curr, row_goal, col_goal):
-    return abs(row_goal - row_curr) + abs(col_goal - col_curr)
+    return np.hypot(row_goal - row_curr, col_goal - col_curr)
 
 #inside bounds and not a barrier
 def can_travel(row, col):
@@ -101,13 +145,28 @@ def can_travel(row, col):
 
 def get_neighbors(row_curr, col_curr):
     neighbors = []
-    #cycle through going up left right down
-    #add cycle through going upleft upright downleft downright
-    for changeRow, changeCol in [(-1,0),(0,-1),(0,1),(1,0),(-1,-1),(-1,1),(1,-1),(1,1)]:
-        row, col = row_curr + changeRow, col_curr + changeCol
-        if can_travel(row, col):
-            #adds to list of cells that can be visited ned
-            neighbors.append((row, col))
+
+    directions = [
+        (-1,0),(1,0),(0,-1),(0,1),
+        (-1,-1),(-1,1),(1,-1),(1,1)
+    ]
+
+    for dr, dc in directions:
+        nr = row_curr + dr
+        nc = col_curr + dc
+
+        if not can_travel(nr, nc):
+            continue
+
+        # Prevent diagonal corner cutting
+        if dr != 0 and dc != 0:
+            if not can_travel(row_curr + dr, col_curr):
+                continue
+            if not can_travel(row_curr, col_curr + dc):
+                continue
+
+        neighbors.append((nr, nc))
+
     return neighbors
 
 # push the neihbors, then pop the lowest cost, check to see if its goal
@@ -153,7 +212,8 @@ def astar(row_start, col_start, row_end, col_end):
                 node_track[(neighborR, neighborC)] = {'parent': (row, col), 'gone': distTravel + 1, 'state': 'closed'}
                 return reconstruct_path(row_end, col_end, node_track)
 
-            new_gone = distTravel + 1
+            step_cost = movement_cost(row, col, neighborR, neighborC)
+            new_gone = distTravel + step_cost
             neighbor_info = node_track.get((neighborR, neighborC))
             #check if neighbor already on closed or open set
             if neighbor_info and neighbor_info['state'] == 'closed':
@@ -210,8 +270,8 @@ def path_Astar(start_room, end_room):
         return None
 
     #x,y is col,row
-    col_start, row_start = nodes[start_room]
-    col_end, row_end = nodes[end_room]
+    col_start, row_start = nodes_small[start_room]
+    col_end, row_end = nodes_small[end_room]
 
     path = astar(row_start, col_start, row_end, col_end)
     if path is None:
@@ -225,8 +285,16 @@ def path_Astar(start_room, end_room):
     #for i in range(0,len(path_temp)):
         #path_temp[i] = (str(path_temp[i][0]), str(path_temp[i][1]))
     path_reversed = path[::-1]
-    path_swapped = [(path_reversed[i][1],path_reversed[i][0]) for i in range(len(path_reversed))]
-    return (path_swapped)
+    path_reversed = path[::-1]
+
+    path_scaled = [
+        (
+            int(col / scale),
+            int(row / scale)
+        )
+        for row, col in path_reversed
+    ]
+    return (path_scaled)
 
 
 
