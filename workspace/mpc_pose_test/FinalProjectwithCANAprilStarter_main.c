@@ -296,6 +296,12 @@ int16_t dan28027adc1 = 0;
 int16_t dan28027adc2 = 0;
 uint16_t MPU9250ignoreCNT = 0;  //This is ignoring the first few interrupts if ADCC_ISR and start sending to IMU after these first few interrupts.
 
+
+
+
+// START IDX of robotDEST is 0 END IDX is given below:
+int lastWaypointIndex = 0;
+
 void main(void) {
     // PLL, WatchDog, enable Peripheral Clocks
     // This example function is found in the F2837xD_SysCtrl.c file.
@@ -999,16 +1005,25 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             // interperet the first value as a int to see if its a valid command, if not this is a vref value and will be handleed in jordans code
             uint16_t command = (uint16_t)fromLVvalues[0];
 
+            float waypointx = fromLVvalues[4];
+            float waypointy = fromLVvalues[5];
+
+            float lastwaypointx = robotdest[waypoint_index-1].x;
+            float lastwaypointy = robotdest[waypoint_index-1].y;
+
             // Receive flag to start loading up the waypoints
             if (command == WAYPOINT_START) {
+
+
 
                 lv_mode = LV_MODE_WAYPOINT_LOAD;
                 waypoint_index = 0;
 
-                robotdest[waypoint_index].x = fromLVvalues[4];
-                robotdest[waypoint_index].y = fromLVvalues[5];
-                start = robotdest[0];
-                waypoint_index++;
+                if(waypointx>0.1f && waypointy>0.1f) {
+                    robotdest[waypoint_index].x = fromLVvalues[4];
+                    robotdest[waypoint_index].y = fromLVvalues[5];
+                    waypoint_index++;
+                }
             }
 
             // We reached the end of the waypoint array, we gotta switch over to jordans mode now
@@ -1017,21 +1032,39 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 lv_mode = LV_MODE_CONTROL;
                 statePos = 0;
 
-                robotdest[waypoint_index].x = fromLVvalues[4];
-                robotdest[waypoint_index].y = fromLVvalues[5];
-                waypoint_index++;
+
+
+                if(waypointx>0.1f && waypointy>0.1f) {
+                    // keep if its not a dropped waypoint
+
+                    // make sure not same as last waypoint
+                    if(waypointx!=lastwaypointx || waypointy!=lastwaypointy) {
+                        robotdest[waypoint_index].x = waypointx;
+                        robotdest[waypoint_index].y = waypointy;
+                        lastWaypointIndex = waypoint_index;
+                        waypoint_index++;
+                    }
+                }
+
+
             }
 
             // Fill the actual waypoint array
             else if (lv_mode == LV_MODE_WAYPOINT_LOAD) {
 
+
                 //if (waypoint_index < NUMWAYPOINTS) {
 
-                    robotdest[waypoint_index].x = fromLVvalues[4];
-                    robotdest[waypoint_index].y = fromLVvalues[5];
+                if(waypointx>0.1f && waypointy>0.1f) {
+                    // keep if its not a dropped waypoint
 
-                    waypoint_index++;
-                //}
+                    // make sure not same as last waypoint
+                    if(waypointx!=lastwaypointx || waypointy!=lastwaypointy) {
+                        robotdest[waypoint_index].x = waypointx;
+                        robotdest[waypoint_index].y = waypointy;
+                        waypoint_index++;
+                    }
+                }
             }
 
             // Normal operation in LV_MODE_CONTROL, just do jordans control data
