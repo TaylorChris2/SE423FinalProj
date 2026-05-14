@@ -2,6 +2,7 @@ const canvas = document.getElementById("mapCanvas");
 const ctx = canvas.getContext("2d");
 
 const img = new Image();
+// floor plan for displaying
 img.src = "/static/floor.png";
 
 
@@ -27,6 +28,7 @@ img.onload = () => {
     ctx.drawImage(img, 0, 0, img.width, img.height,0, 0, canvas.width, canvas.height);
 };
 
+// every 1 second we should update the canvas with potentially new robot positoins and waypoint completion data, this will post to the app.py server.
 setInterval(() => {
     fetch('/status')
     .then(res => res.json())
@@ -42,23 +44,15 @@ setInterval(() => {
     });
 }, 1000);
 
-function buttonPress() {
-    if (navState === STATUS_IDLE || navState === STATUS_ARRIVED ) {
-        navigate();
-    }
 
-    else {
-        togglePause();
-    }
-}
-
-
+// Navigate is the manager that handles when the button is pressed and what to do with that room number
 function navigate() {
     const roomInput = document.getElementById("roomInput");
     const btn = document.getElementById("goBtn");
 
     const room = roomInput.value;
 
+    // post that room number data to the app.py serve so the astar python can process it
     fetch('/navigate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -80,6 +74,7 @@ function navigate() {
 });
 }
 
+// Ideally would stop robot, but pause button only works visually right now
 function togglePause() {
     const btn = document.getElementById("goBtn");
 
@@ -94,6 +89,7 @@ function togglePause() {
     });
 }
 
+// Again, more of a temporary test function, doesn't work but ideally would allow for stopping and restarting
 function toggleNav() {
     fetch('/toggle', { method: 'POST' })
     .then(res => res.json())
@@ -103,6 +99,7 @@ function toggleNav() {
     });
 }
 
+// draws the canvas with all of the waypoints on the image if they exist
 function drawScene() {
 
     ctx.drawImage(
@@ -118,6 +115,7 @@ function drawScene() {
     ctx.strokeStyle = "red";
     ctx.lineWidth = 3;
 
+    // go through all of the waypoints and draw them as circles
     for (let i = 0; i < currentPath.length; i++) {
 
         let x = currentPath[i][0] * SCALE_2;
@@ -126,10 +124,12 @@ function drawScene() {
         if (i === 0)
             ctx.moveTo(x, y);
         else
-            ctx.lineTo(x, y);
+            ctx.lineTo(x, y); // draw lines between them
     }
 
     ctx.stroke();
+
+    // each waypoint type gets a different color green means weve hit that waypoint
 
     for (let i = 0; i < currentPath.length; i++) {
 
@@ -155,6 +155,8 @@ function drawScene() {
     }
     if (robotPosition) {
 
+        //displays robots position
+
         let rx = robotPosition[0] * SCALE_2;
         let ry = robotPosition[1] * SCALE_2;
 
@@ -167,6 +169,7 @@ function drawScene() {
     }
 }
 
+// just updates the buttons
 function updateUI() {
     const btn = document.getElementById("goBtn");
     const input = document.getElementById("roomInput");
