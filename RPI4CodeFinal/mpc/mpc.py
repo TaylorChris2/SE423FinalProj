@@ -321,7 +321,7 @@ class MPC:
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
-        """
+        
         self.obst_pos = self.opti.parameter(2, self.max_obsts)
 
         for k in range(self.N + 1):
@@ -335,7 +335,7 @@ class MPC:
             dist = ca.sqrt(dist_sq)
             
             margin = ca.fmax(dist - self.safe_radius, 1e-4)
-            self.cost += ca.sum2(self.obst_alpha / margin**2)"""
+            self.cost += ca.sum2(self.obst_alpha / margin**2)
 
         self.opti.minimize(self.cost)
 
@@ -756,7 +756,7 @@ def mpc_loop():
         if mpc.mpc_switch == 1:
 
             #DISABLE
-            #mpc.update_obstacles()
+            mpc.update_obstacles()
 
             mpc.solve_mpc()
 

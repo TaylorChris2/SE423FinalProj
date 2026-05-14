@@ -8,11 +8,15 @@ tmux new-session -d -s demo
 
 tmux send-keys -t demo "cd serial_COMandOpti && make && sudo ./shmdelete.sh || true && sudo ./serial_COMandOpti" C-m
 
+
+tmux split-window -v -t demo 
+tmux send-keys -t demo "cd ../webserver && ./run.sh" 
+
 tmux split-window -h -t demo
 tmux send-keys -t demo "cd mpc && make && sudo ./ladar_server" C-m
 
 tmux split-window -v -t demo
-tmux send-keys -t demo "cd mpc && source ~/mpc-env/bin/activate && sudo ~/mpc-env/bin/python3 mpc.py" C-m
+tmux send-keys -t demo "cd mpc && source ~/mpc-env/bin/activate && sudo ~/mpc-env/bin/python3 mpc.py"
 
 
 tmux attach -t demo
