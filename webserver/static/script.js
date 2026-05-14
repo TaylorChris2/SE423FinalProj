@@ -14,6 +14,7 @@ const STATUS_IDLE = 0;
 
 // scales the image width/height appropriately as well as waypoint locations.
 SCALE = 0.5
+SCALE_2 = 0.93
 let navState = STATUS_IDLE;
 
 let currentPath = [];
@@ -119,21 +120,21 @@ function drawScene() {
 
     for (let i = 0; i < currentPath.length; i++) {
 
-        let x = currentPath[i][0] * SCALE;
-        let y = currentPath[i][1] * SCALE;
+        let x = currentPath[i][0] * SCALE_2;
+        let y = currentPath[i][1] * SCALE_2;
 
         if (i === 0)
-            ctx.moveTo(x, y);
+            ctx.moveTo(y, x);
         else
-            ctx.lineTo(x, y);
+            ctx.lineTo(y, x);
     }
 
     ctx.stroke();
 
     for (let i = 0; i < currentPath.length; i++) {
 
-        let x = currentPath[i][0] * SCALE;
-        let y = currentPath[i][1] * SCALE;
+        let x = currentPath[i][0] * SCALE_2;
+        let y = currentPath[i][1] * SCALE_2;
 
         ctx.beginPath();
 
@@ -149,13 +150,13 @@ function drawScene() {
         else
             ctx.fillStyle = "blue";
 
-        ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.arc(y, x, 6, 0, 2 * Math.PI);
         ctx.fill();
     }
     if (robotPosition) {
 
-        let rx = robotPosition[0] * SCALE;
-        let ry = robotPosition[1] * SCALE;
+        let rx = robotPosition[0] * SCALE_2;
+        let ry = robotPosition[1] * SCALE_2;
 
         ctx.beginPath();
         ctx.fillStyle = "lime";

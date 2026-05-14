@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-import navigator 
+import astarAndMap as navigator
 import numpy as np
 
 
@@ -229,21 +229,25 @@ def sendWaypoints(waypoints):
 
         view = waypoint_shm.array
 
-        view['data0'][0] = float(flag)            # control info
-        view['data1'][0] = float(waypoint_seq)   # metadata first
-        view['data2'][0] = float(idx)
-        view['data3'][0] = float(total)
-        view['data4'][0] = float(x)
-        view['data5'][0] = float(y)
+        view['data6'][0] = 0  # writing flag = 0 (not ready)
 
-        view['data7'][0,]= float(1)               # "valid frame
+        # write EVERYTHING first
+
+        view['data0'][0] = flag
+        view['data1'][0] = waypoint_seq
+        view['data2'][0] = idx
+        view['data3'][0] = total
+        view['data4'][0] = x
+        view['data5'][0] = y
+
+        view['data7'][0] = 1  # valid marker LAST
 
         print(view)
         print("SEM BEFORE:", waypoint_sem.sem.value)
+        time.sleep(0.01)
         waypoint_sem.release()
         print("SEM AFTER:", waypoint_sem.sem.value)
-
-        time.sleep(0.1)
+        time.sleep(0.01)
 
 @app.route('/')
 def index():
@@ -260,7 +264,7 @@ def navigate():
         
 
     # Calculate A star given waypoints:
-    waypoints = navigator.path_Astar(int(room))
+    waypoints = navigator.path_Astar(str(3080), str(room))
     
     current_waypoints = waypoints
     current_waypoint_index = 0
