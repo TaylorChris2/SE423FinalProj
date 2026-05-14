@@ -181,7 +181,7 @@ int16_t RobotState = 1;
 int16_t checkfronttally = 0;
 int32_t WallFollowtime = 0;
 
-#define NUMWAYPOINTS 8
+#define NUMWAYPOINTS 500
 uint16_t statePos = 0;
 pose robotdest[NUMWAYPOINTS];  // array of waypoints for the robot
 pose start;
@@ -1004,6 +1004,11 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
                 lv_mode = LV_MODE_WAYPOINT_LOAD;
                 waypoint_index = 0;
+
+                robotdest[waypoint_index].x = fromLVvalues[4];
+                robotdest[waypoint_index].y = fromLVvalues[5];
+                start = robotdest[0];
+                waypoint_index++;
             }
 
             // We reached the end of the waypoint array, we gotta switch over to jordans mode now
@@ -1011,19 +1016,22 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
                 lv_mode = LV_MODE_CONTROL;
                 statePos = 0;
+
+                robotdest[waypoint_index].x = fromLVvalues[4];
+                robotdest[waypoint_index].y = fromLVvalues[5];
+                waypoint_index++;
             }
 
             // Fill the actual waypoint array
             else if (lv_mode == LV_MODE_WAYPOINT_LOAD) {
 
-                if (waypoint_index < NUMWAYPOINTS) {
+                //if (waypoint_index < NUMWAYPOINTS) {
 
-                    robotdest[waypoint_index].x = fromLVvalues[0];
-                    robotdest[waypoint_index].y = fromLVvalues[1];
-                    start = robotdest[0];
+                    robotdest[waypoint_index].x = fromLVvalues[4];
+                    robotdest[waypoint_index].y = fromLVvalues[5];
 
                     waypoint_index++;
-                }
+                //}
             }
 
             // Normal operation in LV_MODE_CONTROL, just do jordans control data

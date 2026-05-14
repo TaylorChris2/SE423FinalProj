@@ -104,10 +104,10 @@ robot_position = [0, 0]
 current_waypoint_index = 0
 current_waypoints = []
 
-WAYPOINT_SEM_NAME = "sem-LVCOMApp-sendto"
-WAYPOINT_SHM_NAME = "sharedmem-LVCOMApp-sendto"
-FEEDBACK_SEM_NAME = "sharedmem-LVCOMApp-readfrom"
-FEEDBACK_SHM_NAME = "sem-LVCOMApp-readfrom"
+WAYPOINT_SEM_NAME = "sem-LVCOMApp-readfrom"
+WAYPOINT_SHM_NAME = "sharedmem-LVCOMApp-readfrom"
+FEEDBACK_SEM_NAME = "sem-LVCOMApp-sendto"
+FEEDBACK_SHM_NAME = "sharedmem-LVCOMApp-sendto"
 
 WAYPOINT_START = 999.0
 WAYPOINT_MIDDLE = 888.0
@@ -123,12 +123,20 @@ STATUS_ARRIVED = 3
 STATUS_IDLE = 0
 
 WAYPOINT_DTYPE = np.dtype([
-    ('data', '<f4', (8,))
+    ('data0', '<f4'),
+    ('data1', '<f4'),
+    ('data2', '<f4'),
+    ('data3', '<f4'),
+    ('data4', '<f4'),
+    ('data5', '<f4'),
+    ('data6', '<f4'),
+    ('data7', '<f4')
 ])
 
 FEEDBACK_DTYPE = np.dtype([
     ('data', '<f4', (8,))
 ])
+
 
 waypoint_shm = ShmRegion(
     WAYPOINT_SHM_NAME,
@@ -140,6 +148,8 @@ waypoint_sem = NamedSemaphore(
     WAYPOINT_SEM_NAME,
     create=False
 )
+
+
 
 feedback_shm = ShmRegion(FEEDBACK_SHM_NAME, FEEDBACK_DTYPE, create=False)
 feedback_sem = NamedSemaphore(FEEDBACK_SEM_NAME, create=False)
@@ -155,13 +165,11 @@ def update_feedback():
     global navigation_state
 
     #Updates status and position from received waypoints
-    print("UPDATE")
+    #print("UPDATE")
     try:
-        print("try")
+
         
-        if not feedback_sem.sem.acquire(timeout=0.25):
-                print("timeout")
-                return
+        feedback_sem.sem.acquire()
 
         data = feedback_shm.array['data'][0]
 
@@ -170,7 +178,6 @@ def update_feedback():
             float(data[1]),
             float(data[2])
         ]
-        print(robot_position)
 
         current_waypoint_index = int(data[6])
 
@@ -183,11 +190,11 @@ def update_feedback():
             STATUS_ARRIVED,
             STATUS_PAUSED}:
 
-            navigation_state = status
+            pass
+            #navigation_state = status
 
 
     except Exception as e:
-        print("no work")
         print(e)
         pass
 
@@ -222,18 +229,21 @@ def sendWaypoints(waypoints):
 
         view = waypoint_shm.array
 
-        view['data'][0,0] = flag
-        view['data'][0,1] = waypoint_seq
-        view['data'][0,2] = idx
-        view['data'][0,3] = total
-        view['data'][0,4] = x
-        view['data'][0,5] = y
-        view['data'][0,6] = 0
-        view['data'][0,7] = 0
+        view['data0'][0] = float(flag)            # control info
+        view['data1'][0] = float(waypoint_seq)   # metadata first
+        view['data2'][0] = float(idx)
+        view['data3'][0] = float(total)
+        view['data4'][0] = float(x)
+        view['data5'][0] = float(y)
 
+        view['data7'][0,]= float(1)               # "valid frame
+
+        print(view)
+        print("SEM BEFORE:", waypoint_sem.sem.value)
         waypoint_sem.release()
+        print("SEM AFTER:", waypoint_sem.sem.value)
 
-        time.sleep(0.005)
+        time.sleep(0.1)
 
 @app.route('/')
 def index():

@@ -332,11 +332,11 @@ class MPC:
         solver_opts = {
             "ipopt.max_iter": 20,
             "ipopt.tol": 1e-3,
-            "ipopt.print_level": 5,
+            "ipopt.print_level": 0,
             "ipopt.linear_solver": "mumps",
             "ipopt.mu_strategy": "adaptive",
             "ipopt.warm_start_init_point": "yes",
-            "ipopt.max_wall_time": 1.5
+            #"ipopt.max_wall_time": 1.5
             #"print_time": 0,
             #"ipopt.sb": "yes",
             # "ipopt.warm_start_mult_bound_push": 1e-6
