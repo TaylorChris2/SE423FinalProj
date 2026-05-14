@@ -29,7 +29,8 @@ ODOM_DTYPE = np.dtype([
     ('theta', '<f4'),
     ('w_x', '<f4'),
     ('w_y', '<f4'),
-    ('unused', '<f4', (3,)),   # remaining LV floats
+    ('mpc_switch', '<f4'),
+    ('unused', '<f4', (2,)),   # remaining LV floats
 ])
 LIDAR_DTYPE = np.dtype([
     ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
@@ -166,6 +167,7 @@ class OdomReader(threading.Thread):
         self.received = 0
         self.dropped = 0
         self._stop = threading.Event()
+        self.ft_per_pixel = 8 / 39
     def stop(self): self._stop.set()
     def run(self):
         view = self.shm.array
@@ -175,15 +177,19 @@ class OdomReader(threading.Thread):
             x = float(view['x'][0])
             y = float(view['y'][0])
             theta = float(view['theta'][0])
-            w_x = float(view['w_x'][0])
-            w_y = float(view['w_y'][0])
+            
+            w_x = (float(view['w_x'][0]) * self.ft_per_pixel - 286.18)
+            w_y = (float(view['w_y'][0]) * self.ft_per_pixel  - 332.305)
+ 
+            mpc_switch = int(view['mpc_switch'][0])
+            
             self.received += 1
             try:
-                self.q.put_nowait((x, y, theta, w_x, w_y))
+                self.q.put_nowait((x, y, theta, w_x, w_y, mpc_switch))
             except queue.Full:
                 try: self.q.get_nowait()
                 except queue.Empty: pass
-                try: self.q.put_nowait((x, y, theta, w_x, w_y))
+                try: self.q.put_nowait((x, y, theta, w_x, w_y, mpc_switch))
                 except queue.Full: pass
                 self.dropped += 1
         
@@ -219,6 +225,9 @@ class MPC:
         self.robot_x = 0
         self.robot_y = 0
         self.robot_theta = 0
+        self.mpc_switch = 0
+        self.waypoint_x = 0
+        self.waypoint_y = 0
         self.Xprev = np.zeros((self.NX, self.N + 1))
         self.Uprev = np.zeros((self.NU, self.N))
         self.X_sol = np.zeros((self.NX, self.N + 1))
@@ -288,6 +297,7 @@ class MPC:
         self.xd = self.opti.parameter(self.NX)  # Reference
 
         # Dynamics constraints
+        
         for k in range(self.N):
             A, B = EOM_kin_ca(self.X[:, k], self.dt)
             x_next = ca.mtimes([A, self.X[:, k]]) + ca.mtimes([B, self.U[:, k]])
@@ -311,6 +321,7 @@ class MPC:
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
         # Store obstacles as (2 x obst_num) parameter for vectorized ops
+        """
         self.obst_pos = self.opti.parameter(2, self.max_obsts)
 
         for k in range(self.N + 1):
@@ -324,13 +335,13 @@ class MPC:
             dist = ca.sqrt(dist_sq)
             
             margin = ca.fmax(dist - self.safe_radius, 1e-4)
-            self.cost += ca.sum2(self.obst_alpha / margin**2)
+            self.cost += ca.sum2(self.obst_alpha / margin**2)"""
 
         self.opti.minimize(self.cost)
 
         # Configure solver
         solver_opts = {
-            "ipopt.max_iter": 20,
+            "ipopt.max_iter": 50,
             "ipopt.tol": 1e-3,
             "ipopt.print_level": 0,
             "ipopt.linear_solver": "mumps",
@@ -464,13 +475,15 @@ class MPC:
     def update_robot_pose_and_waypoints(self):
         try:
             data = self.odom_q.get(timeout=0.1)
-            #print(data)
+            
 
             self.robot_x = data[0]
             self.robot_y = data[1]
             self.robot_theta = data[2]
             self.waypoint_x = data[3]
             self.waypoint_y = data[4]
+            self.mpc_switch = data[5]
+            
 
             self.opti.set_value(self.x0, np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
             #print("Set x0 to", np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
@@ -613,7 +626,7 @@ class MPC:
         self.ax.set_title("Real-Time MPC + Lidar Visualization")
 
         self.ax.grid(True)
-        self.ax.legend()
+        #self.ax.legend()
 
         self.ax.set_aspect('equal')
 
@@ -736,20 +749,27 @@ mpc.start_threads()
 
 def mpc_loop():
 
-    while np.linalg.norm(np.array([mpc.robot_x, mpc.robot_y]) - np.array([5,5])) > 3e-1:
-
-        mpc.update_obstacles()
-
+    while True:
+    
         mpc.update_robot_pose_and_waypoints()
-
-        mpc.solve_mpc()
-
-        mpc.publish_control(mpc.U_sol[:, 0:3])
-
-        #time.sleep(0.02)
         
-    mpc.U_sol = np.zeros((mpc.NU, mpc.N))
-    mpc.publish_control(mpc.U_sol[:, 0:3])
+        if mpc.mpc_switch == 1:
+
+            #DISABLE
+            #mpc.update_obstacles()
+
+            mpc.solve_mpc()
+
+            mpc.publish_control(mpc.U_sol[:, 0:3])
+
+            #time.sleep(0.02)
+        else:  
+        
+            mpc.U_sol = np.zeros((mpc.NU, mpc.N))
+            mpc.publish_control(mpc.U_sol[:, 0:3])
+            
+            print("off", mpc.mpc_switch)
+            time.sleep(0.1)
 
 loop_thread = threading.Thread(
     target=mpc_loop,

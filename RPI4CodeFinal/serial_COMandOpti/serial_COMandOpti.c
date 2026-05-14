@@ -553,7 +553,7 @@ int main()
             receiving_state = 0;
 
             if (sem_getvalue(sendto_LVCOMApp_mutex_sem,  &sem_count_send) == 0) {
-            printf("x:%.3f,y:%.3f,theta:%.3f,w_x:%.3f,w_y:%.3f\n",shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[0],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[1],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[2],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[3],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[4]);
+            printf("x:%.3f,y:%.3f,theta:%.3f,w_x:%.3f,w_y:%.3f,switch:%.3f\n",shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[0],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[1],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[2],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[3],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[4],shared_mem_ptr_sendto_LVCOMApp->new_ToLV.data_flts[5]);
               if (sem_post(sendto_LVCOMApp_mutex_sem) == -1){
                 error("Error serial_COMandOpti sem_post: send_mutex");
               }
@@ -600,7 +600,7 @@ int main()
       for (i = 0; i < 4*LVNUM_TOFROM_FLOATS; i++) {
         LVto28x[i] = shared_mem_ptr_readfrom_LVCOMApp->new_FromLV.data_char[i];
       }
-      printf("%.3f\n", shared_mem_ptr_readfrom_LVCOMApp->new_FromLV.data_flts[0]);
+      //printf("%.3f\n", shared_mem_ptr_readfrom_LVCOMApp->new_FromLV.data_flts[0]);
       sd_write("*");// Data from LVCOMApp to F28379D
       sd_write("$");
       sd_writen(LVto28x,4*LVNUM_TOFROM_FLOATS);

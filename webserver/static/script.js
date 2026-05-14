@@ -124,9 +124,9 @@ function drawScene() {
         let y = currentPath[i][1] * SCALE_2;
 
         if (i === 0)
-            ctx.moveTo(y, x);
+            ctx.moveTo(x, y);
         else
-            ctx.lineTo(y, x);
+            ctx.lineTo(x, y);
     }
 
     ctx.stroke();
@@ -150,7 +150,7 @@ function drawScene() {
         else
             ctx.fillStyle = "blue";
 
-        ctx.arc(y, x, 6, 0, 2 * Math.PI);
+        ctx.arc(x, y, 6, 0, 2 * Math.PI);
         ctx.fill();
     }
     if (robotPosition) {

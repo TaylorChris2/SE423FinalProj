@@ -217,7 +217,16 @@ def path_Astar(start_room, end_room):
     if path is None:
         return None
     path = filter_waypoints(path)
-    return path
+    
+    #path_temp = []
+    #for x in path:
+        #print(x)
+        #path_temp.append((float(x[0]) * ft_per_pixel,float(x[1]) * ft_per_pixel))
+    #for i in range(0,len(path_temp)):
+        #path_temp[i] = (str(path_temp[i][0]), str(path_temp[i][1]))
+    path_reversed = path[::-1]
+    path_swapped = [(path_reversed[i][1],path_reversed[i][0]) for i in range(len(path_reversed))]
+    return (path_swapped)
 
 
 
