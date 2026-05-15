@@ -1144,12 +1144,10 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
 
         // States are:
 
-        // 1: Navigate
+        // 1: Navigate by updating vref and turn. Decide when to use mpc
         // 10: Relocalize with wall follow - NOT USED
         // 20: April tag vision
-        // 30: decide what waypoints to send
-        // 40: decide when to use mpc
-        // TODO: Arrived state? Before start state (when no states have been received)?
+        // 30: when to increment to next waypoint
 
         switch (RobotState) {
         case 1:
@@ -1160,7 +1158,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 control_count = 0;
                 flag_control = 0;
             }
-
+            // update vref and turnref
             if (control_count < dt_control) {
                 vref = Vref1;
                 turn = Turnref1;
@@ -1171,11 +1169,14 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
                 vref = Vref3;
                 turn = Turnref3;
             }
+            //calculate the euclidean distance between robot and current waypoint
             robDist = sqrt(ROBOTps.x*ROBOTps.x + ROBOTps.y*ROBOTps.y);
             wayDist = sqrt(robotdest[statePos].x*robotdest[statePos].x + robotdest[statePos].y*robotdest[statePos].y);
             edist = abs(wayDist - robDist);
             int mpcSwitch = 0;
+            // check if robot is less than 0.3 feet from waypoint
             if (edist < 0.3) {
+                // turn off MPC
                 mpcSwitch = 0; 
                 RobotState = 30;
             }
@@ -1187,6 +1188,8 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             control_count++;
             break;
         case 10:
+            // originally right wall follow
+            // not used for our implementation
             if (right_wall_follow_state == 1) {
                 //Left Turn
                 turn = Kp_front_wall*(14.5 - LADARfront);
@@ -1217,7 +1220,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             break;
 
         case 20:
-            // put vision code here
+            // update robot position when seen april tag
             DataToLabView.floatData[0] = april_robot_x;
             DataToLabView.floatData[1] = april_robot_y;
             DataToLabView.floatData[2] = april_robot_theta;
@@ -1225,9 +1228,11 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
             break;
 
         case 30:
+            //if seen april tag
             if (tagid >= 0) {
                 RobotState = 20;
             }
+            // increment to next waypoint
             statePos++;
             DataToLabView.floatData[3] = robotdest[statePos].x;
             DataToLabView.floatData[4] = robotdest[statePos].y;
