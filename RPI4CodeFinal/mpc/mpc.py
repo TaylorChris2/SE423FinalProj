@@ -15,6 +15,7 @@ from dynamics import EOM_kin_ca
 import matplotlib.animation as animation
 from matplotlib.patches import Circle
 
+# Semaphore and shared memory paths
 LIDAR_SEM_MUTEX_NAME = "sem-new-ladar-dist"
 LIDAR_SHARED_MEM_NAME = "posix-shared-mem-ladar-dist"
 ODOM_SEM_MUTEX_NAME = "sem-LVCOMApp-sendto"
@@ -22,6 +23,7 @@ ODOM_SHARED_MEM_NAME = "sharedmem-LVCOMApp-sendto"
 CONTROL_SEM_MUTEX_NAME = "sem-LVCOMApp-readfrom"
 CONTROL_SHARED_MEM_NAME = "sharedmem-LVCOMApp-readfrom"
 
+# Data types for receiving odometry/waypoint and lidar data and for sending control data
 N_BEAMS = 228
 ODOM_DTYPE = np.dtype([
     ('x', '<f4'),
@@ -30,10 +32,10 @@ ODOM_DTYPE = np.dtype([
     ('w_x', '<f4'),
     ('w_y', '<f4'),
     ('mpc_switch', '<f4'),
-    ('unused', '<f4', (2,)),   # remaining LV floats
+    ('unused', '<f4', (2,)),   # 32 bytes
 ])
 LIDAR_DTYPE = np.dtype([
-    ('points',         '<f4', (N_BEAMS,)),  # 1824 → 1856 bytes total
+    ('points',         '<f4', (N_BEAMS,)),  # 1824 bytes
 ])
 CONTROL_DTYPE = np.dtype([
     ('Vref1', '<f4'),
@@ -43,11 +45,11 @@ CONTROL_DTYPE = np.dtype([
     ('Vref3', '<f4'),
     ('Turnref3', '<f4'),
     ('flag', '<u4'),
-    ('dt', '<f4'),
+    ('dt', '<f4'), # 32 bytes
 ])
 
 class ShmRegion:
-    """A POSIX shared-memory region viewed as a numpy structured scalar."""
+    """A POSIX shared-memory region viewed as a numpy structured scalar. As used in Marius SLAM code"""
     def __init__(self, name: str, dtype: np.dtype, create: bool = False):
         self.name = name
         size = dtype.itemsize
@@ -72,7 +74,7 @@ class ShmRegion:
         except Exception: pass
 
 class NamedSemaphore:
-    """A POSIX named semaphore. Same name across producer and consumer."""
+    """A POSIX named semaphore. Same name across producer and consumer. Adapted from Marius SLAM code"""
     def __init__(self, name: str, create: bool = False, initial: int = 0):
         self.name = name
         if create:
@@ -94,17 +96,15 @@ class NamedSemaphore:
             return False
     
     def acquire_latest(self, timeout: Optional[float] = None) -> bool:
-        """
-        Wait for at least one post,
-        then drain all remaining semaphore counts by getting one.
-        """
+        """Drain the current semaphore count ro get the latest data from shared memory"""
+        
         # Wait until at least one update exists
         try:
             self.sem.acquire(timeout)
         except posix_ipc.BusyError:
             return False
 
-        # Drain any backlog
+        # Iterate through the semaphore to drain
         while True:
             try:
                 self.sem.acquire(0)
@@ -125,7 +125,7 @@ class NamedSemaphore:
         except posix_ipc.ExistentialError: pass
 
 class LidarReader(threading.Thread):
-    """Drains the lidar semaphore, pushes copies of scans onto a queue."""
+    """Drains the lidar semaphore, pushes copies of scans onto a queue. Adapted from Marius SLAM code"""
     def __init__(self, shm: ShmRegion, sem: NamedSemaphore, q: queue.LifoQueue):
         super().__init__(daemon=True, name="LidarReader")
         self.shm = shm
@@ -153,11 +153,8 @@ class LidarReader(threading.Thread):
                 except queue.Full: pass
                 self.dropped += 1
 
-    def get_min_objects(self):
-        pass
-
 class OdomReader(threading.Thread):
-    """Drains the lidar semaphore, pushes copies of scans onto a queue."""
+    """Drains the odometry semaphore, pushes copies of scans onto a queue. Adapted from Marius SLAM code LidarReader"""
     def __init__(self, shm: ShmRegion, sem: NamedSemaphore, q: queue.LifoQueue):
         super().__init__(daemon=True, name="OdomReader")
         self.shm = shm
@@ -174,13 +171,16 @@ class OdomReader(threading.Thread):
         while not self._stop.is_set():
             if not self.sem.acquire_latest(timeout=0.2):
                 continue
+            # Get odometry
             x = float(view['x'][0])
             y = float(view['y'][0])
             theta = float(view['theta'][0])
             
+            # Get waypoints transformed from map coordinates in pixel space to robot coordinates in ft
             w_x = (float(view['w_x'][0]) * self.ft_per_pixel - 286.18)
             w_y = (float(view['w_y'][0]) * self.ft_per_pixel  - 332.305)
  
+            # Control when MPC runs
             mpc_switch = int(view['mpc_switch'][0])
             
             self.received += 1
@@ -196,32 +196,34 @@ class OdomReader(threading.Thread):
 class MPC:
 
     def __init__(self, lidar_shm_name: str, lidar_sem_name: str, odom_shm_name: str, odom_sem_name: str, control_shm_name: str, control_sem_name: str):
+        """Casadi-based MPC class to send Vref and Turnref to the red board"""
+        
+        # Initialize optimization problem
         self.opti = ca.Opti()
 
-        self.NX = 3
-        self.NU = 2
-        self.N = 20
-        self.dt = 0.25
+        self.NX = 3 # State dimensions
+        self.NU = 2 # Control dimensions
+        self.N = 20 # Horizon length
+        self.dt = 0.25 # Horizon timestep
 
         # Control bounds
-        self.v_max = 2
-        self.omega_max = 2
-        self.du_max = 10
+        self.v_max = 2 # ft/s
+        self.omega_max = 2 # rad/s
+        self.du_max = 10 # ft/s^2, rad/s^2
 
         # Cost matrices
         self.Q = ca.diag(ca.DM([50.0, 50.0, 10.0]))
         self.R = ca.diag(ca.DM([10, 50]))
         
-        # Obstacle inflation radius and cost weight
-        self.safe_radius = 1 #ft
-        self.obst_alpha = 1e1
-        self.max_obsts = 5
+        self.safe_radius = 1 #ft, obstacle inflation radius
+        self.obst_alpha = 1e1 #Obstacle cost gain
+        self.max_obsts = 5 #Max obstacles to be processed in the MPC
         self.lidar_deg_res = 1.05 #deg
         self.lidar_zero_idx = 113
-        self.lidar_offset = 0
-        self.lidar_tol = 5
+        self.lidar_offset = 0.75 #ft, Distance from robot to LiDAR center
+        self.lidar_tol = 5 #LiDAR points to throw away
         
-        # Initial pose
+        # Initial pose and control
         self.robot_x = 0
         self.robot_y = 0
         self.robot_theta = 0
@@ -245,16 +247,18 @@ class MPC:
         self.control_shm_name = control_shm_name
         self.control_sem_name = control_sem_name
 
+        # Begin communication threads and setup the MPC QP and constraints
         self.init_threads()
         self.mpc_setup_problem()
 
     def init_threads(self):
+        """Starts communication threads for receiving LiDAR and odometry/waypoint data and for sending control data"""
         
         self.seq_counter = 0
 
         self.lidar_shm = ShmRegion(self.lidar_shm_name, LIDAR_DTYPE, create=False)
         self.lidar_sem = NamedSemaphore(self.lidar_sem_name)
-        self.lidar_q   = queue.LifoQueue(maxsize=4)
+        self.lidar_q   = queue.LifoQueue(maxsize=4) #LifoQueue grabs the data most recently put into the queue
 
         self.odom_shm  = ShmRegion(self.odom_shm_name,  ODOM_DTYPE,  create=False)
         self.odom_sem  = NamedSemaphore(self.odom_sem_name)
@@ -268,10 +272,12 @@ class MPC:
         self.control_sem  = NamedSemaphore(self.control_sem_name)
     
     def start_threads(self):
+        """Start MPC communication threads"""
         self.lidar_reader.start()
         self.odom_reader.start()
     
     def stop_threads(self):
+        """Stop and close MPC communication threads. Adapted from Marius SLAM code"""
         self._stop.set()
         self.lidar_reader.stop()
         self.odom_reader.stop()
@@ -288,52 +294,53 @@ class MPC:
         self.lidar_sem.close()
 
     def mpc_setup_problem(self):
+        """Create the MPC QP with added obstacle cost and dynamics constraints"""
 
         # Decision variables
         self.X = self.opti.variable(self.NX, self.N + 1)  # States
         self.U = self.opti.variable(self.NU, self.N)  # Controls
 
         self.x0 = self.opti.parameter(self.NX)  # Initial state
-        self.xd = self.opti.parameter(self.NX)  # Reference
+        self.xd = self.opti.parameter(self.NX)  # Waypoint
 
-        # Dynamics constraints
-        
+        # Dynamics constraints (xdot = Ax + Bu)
         for k in range(self.N):
-            A, B = EOM_kin_ca(self.X[:, k], self.dt)
+            A, B = EOM_kin_ca(self.X[:, k], self.dt) # Get linearized robot dynamics across the horizon
             x_next = ca.mtimes([A, self.X[:, k]]) + ca.mtimes([B, self.U[:, k]])
             self.opti.subject_to(self.X[:, k + 1] == x_next)
 
         # Initial state constraint
         self.opti.subject_to(self.X[:, 0] == self.x0)
 
-        # Control bounds
+        # Control bounds constraint
         self.opti.subject_to(self.opti.bounded(-self.v_max, self.U[0, :], self.v_max))
         self.opti.subject_to(self.opti.bounded(-self.omega_max, self.U[1, :], self.omega_max))
+        
+        # Control rate bounds constraints (max dU/dt)
         for k in range(self.N-1):    
             delta = self.U[:, k+1] - self.U[:, k]         # 2x1    
             self.opti.subject_to(self.opti.bounded(-self.du_max, delta / self.dt, self.du_max))
 
-        # Qudratic Cost Function
+        # Standard Qudratic Cost Function (xQx' + uRu')
         self.cost = 0
         for k in range(self.N):
             self.cost += ca.mtimes([(self.X[:, k] - self.xd).T, self.Q, (self.X[:, k] - self.xd)])
         for k in range(self.N):
             self.cost += ca.mtimes([self.U[:, k].T, self.R, self.U[:, k]])
 
-        # Store obstacles as (2 x obst_num) parameter for vectorized ops
-        
+        # Parameter to store obstacle positions
         self.obst_pos = self.opti.parameter(2, self.max_obsts)
 
+        # Add obstacle costs along the horizon
         for k in range(self.N + 1):
-            # Robot position at timestep k: (2 x 1)
-            pos_k = self.X[:2, k]  # shape (2,)
-            #Broadcast: (2 x obst_num) - (2 x 1) = (2 x obst_num)
+            pos_k = self.X[:2, k]
+            
+            # Get robot distance from obstacles
             diff = self.obst_pos - ca.repmat(pos_k, 1, self.max_obsts)
-            # Squared distances: (1 x obst_num)
-            dist_sq = ca.sum1(diff * diff)  # sum over rows (x and y)
-            # Vectorized margin
+            dist_sq = ca.sum1(diff * diff)
             dist = ca.sqrt(dist_sq)
             
+            # Apply tuned inverse squared cost function to penalize crossing the safe radius but nowhere else
             margin = ca.fmax(dist - self.safe_radius, 1e-4)
             self.cost += ca.sum2(self.obst_alpha / margin**2)
 
@@ -355,77 +362,40 @@ class MPC:
         self.opti.solver("ipopt", solver_opts)
 
     def update_obstacles(self):
-        
+        """Filters LiDAR scans to the N-closest and minimum spaced obstacles"""
+
         try:
-            scan = self.lidar_q.get(timeout=0.1)[self.lidar_tol:-self.lidar_tol]
-            scan = scan / 1000 * 3.28084
-
-            #close_scan_idx = np.where(scan < 2)
-            #print(close_scan_idx)
-            #close_scan = scan[close_scan_idx]
-
-            #if len(close_scan) == 0:
-                #return
-
-            #k = min(self.max_obsts, len(scan))
-
-            #min_scan = []
-            #idx = []
-            #for i in range(k):
-                #min_scan.append(min(scan))
-                #idx.append(np.argmin(scan))
-
-            #min_scan_xy = np.full((2, self.max_obsts), 1e1)
-
-            #for i in range(k):
-                #theta = np.deg2rad(self.lidar_deg_res * (idx[i] - self.lidar_zero_idx))
-                #min_scan_xy[0, i] = min_scan[i] * np.cos(theta)
-                #min_scan_xy[1, i] = min_scan[i] * np.sin(theta)
-            #print(min_scan_xy)
-            #min_scan_xy = self.transform_lidar(min_scan_xy)
-            #print(min_scan_xy)
+            scan = self.lidar_q.get(timeout=0.1)[self.lidar_tol:-self.lidar_tol] #Get toleranced scan
+            scan = scan / 1000 * 3.28084 # Convert LiDAR data from mm to ft
             
-            #self.latest_obstacles = min_scan_xy.copy()
-            
-            #self.opti.set_value(self.obst_pos, min_scan_xy)
-            
-            # =========================
-            # VALID RETURNS ONLY
-            # =========================
+            # Get only scans greater than 0.05 ft away
             valid = np.isfinite(scan) & (scan > 0.05)
-
             valid_idx = np.where(valid)[0]
             valid_scan = scan[valid]
 
-            # =========================
-            # SORT BY DISTANCE
-            # =========================
+            # Sort points by distance
             sorted_order = np.argsort(valid_scan)
-
             candidate_idx = valid_idx[sorted_order]
             candidate_scan = valid_scan[sorted_order]
 
-            # =========================
-            # GREEDY SPATIAL FILTER
-            # =========================
             selected_points = []
             selected_idx = []
 
-            min_spacing = self.safe_radius * 3/4
+            min_spacing = self.safe_radius # Minimum spacing between obstacles chosen to avoid
 
             for i in range(len(candidate_scan)):
 
                 r = candidate_scan[i]
 
+                # Get theta for each lidar point
                 theta = np.deg2rad(
                     self.lidar_deg_res *
                     (candidate_idx[i] - self.lidar_zero_idx)
                 )
 
-                # Local-frame lidar point
+                # Convert lidar points to xy
                 px = r * np.cos(theta)
                 py = r * np.sin(theta)
-
                 candidate_pt = np.array([px, py])
 
                 # Always keep first point
@@ -436,12 +406,11 @@ class MPC:
 
                 # Distance to previously selected points
                 keep = True
-
                 for prev_pt in selected_points:
 
-                    d = np.linalg.norm(candidate_pt - prev_pt)
+                    d = np.linalg.norm(candidate_pt - prev_pt) # Distance between lidar points
 
-                    if d < min_spacing:
+                    if d < min_spacing: # Iterate through other minimum distance points until minimum spacing reached
                         keep = False
                         break
 
@@ -449,34 +418,35 @@ class MPC:
                     selected_points.append(candidate_pt)
                     selected_idx.append(i)
 
-                if len(selected_points) >= self.max_obsts:
+                if len(selected_points) >= self.max_obsts: # Obstacle array filled
                     break
 
-            # =========================
-            # BUILD OBSTACLE ARRAY
-            # =========================
+
+            # Build obstacle position array (filled with 1e6 for empty indeces)
             min_scan_xy = np.full((2, self.max_obsts), 1e6)
-
             for i, pt in enumerate(selected_points):
-
                 min_scan_xy[0, i] = pt[0]
                 min_scan_xy[1, i] = pt[1]
 
             # Transform to world frame
             min_scan_xy = self.transform_lidar(min_scan_xy)
 
+            # SWave obstacles for plotting
             self.latest_obstacles = min_scan_xy.copy()
 
+            # Update obstacle problem parameter
             self.opti.set_value(self.obst_pos, min_scan_xy)
             
         except queue.Empty:
             pass
 
     def update_robot_pose_and_waypoints(self):
+        """Get current robot pose and waypoints and mpc status"""
+        
         try:
             data = self.odom_q.get(timeout=0.1)
             
-
+            # Get odometry and waypoint data and store value of the switch
             self.robot_x = data[0]
             self.robot_y = data[1]
             self.robot_theta = data[2]
@@ -484,40 +454,40 @@ class MPC:
             self.waypoint_y = data[4]
             self.mpc_switch = data[5]
             
-
-            self.opti.set_value(self.x0, np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
+            self.opti.set_value(self.x0, np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1)) # Set next initial condition to current robot pose
             #print("Set x0 to", np.array([self.robot_x, self.robot_y, self.robot_theta]).reshape(3,1))
-            self.opti.set_value(self.xd, np.array([self.waypoint_x, self.waypoint_y, 0.0]).reshape(3,1))
+            self.opti.set_value(self.xd, np.array([self.waypoint_x, self.waypoint_y, 0.0]).reshape(3,1)) # Set current waypoint
 
         except queue.Empty:
             pass
 
     def solve_mpc(self):
+        """Calls IPOPT solver to solve the MPC problem"""
 
+        # Warm start MPC solutions with the previous solution
         self.opti.set_initial(self.X, self.Xprev)
         self.opti.set_initial(self.U, self.Uprev)
 
         try:
 
-            sol = self.opti.solve_limited()
+            sol = self.opti.solve_limited() # Solve function with timeout capability
 
+            # Get solver status and raise error if failed
             stats = self.opti.stats()
-
             success = stats["success"]
             status = stats["return_status"]
-
             print(status)
 
             if not success:
                 raise RuntimeError(status)
 
+            # Extract solution
             X_sol = sol.value(self.X)
             U_sol = sol.value(self.U)
 
-            # ONLY SAVE SUCCESSFUL SOLUTIONS
+            # Save solutions
             self.Xprev = X_sol
             self.Uprev = U_sol
-
             self.X_sol = X_sol
             self.U_sol = U_sol
 
@@ -525,16 +495,18 @@ class MPC:
 
             print("MPC failed:", e)
 
-            # RESET BAD WARM START
+            # Reset warm start from bad solution
             self.opti.set_initial(self.X, 0)
             self.opti.set_initial(self.U, 0)
         
+            # Stop robot if solve failed or took too long
             self.U_sol = np.zeros((self.NU, self.N))
             
             print("Timeout")
                 
 
     def transform_lidar(self, min_scan):
+        """Transforms LiDAR points from the robot frame to the world frame. Adapted from red board code"""
 
         theta_std = self.robot_theta
         R = np.array([[np.cos(theta_std), -np.sin(theta_std)],
@@ -544,13 +516,15 @@ class MPC:
         return min_scan_world
 
     def publish_control(self, U: np.ndarray):
+        """Sends solved MPC control values to SerialComOpti"""
+        
         shm = self.control_shm
         sem = self.control_sem
         
         view = shm.array
         U = U.astype(np.float32)
-        #print(U)
         
+        # Store the first three control values: one to apply immediately and the other two for caching if solving takes longer than dt
         view["Vref1"][0] = float(U[0,0])
         view["Turnref1"][0] = -float(U[1,0])
         view["Vref2"][0] = float(U[0,1])
@@ -559,16 +533,16 @@ class MPC:
         view["Turnref3"][0] = -float(U[1,2])
         print(view)
 
-        # write sequence last so readers see a consistent frame
-        self.seq_counter += 1
+        # Flag for redboard to know if new control values received
         view['flag'][0] = 1
         
+        # Provide MPC timstep as a delay between cached control values
         view['dt'][0] = int(1000 * self.dt)
 
-        # notify readers
-        sem.release()   # or sem.post() depending on your NamedSemaphore API
+        sem.release()
 
     def start_animation(self):
+        """AI generated visualization code for debugging. Starts the plots  for robot position, osbtacle positions and inflation radii, and planned MPC path"""
 
         self.fig, self.ax = plt.subplots(figsize=(10, 10))
 
@@ -641,6 +615,7 @@ class MPC:
         plt.show()
         
     def update_animation(self, frame):
+        """AI generated visualization code for debugging. Updates and plots the current robot position, osbtacle positions and inflation radii, and planned MPC path"""
 
         # =========================
         # MPC PATH
@@ -740,8 +715,6 @@ class MPC:
             self.obstacle_scatter
         )
 
-x_next = np.array([0, 0, 0])
-x_d = np.array([1, 0.5, np.pi/4])
 
 mpc = MPC(LIDAR_SHARED_MEM_NAME, LIDAR_SEM_MUTEX_NAME, ODOM_SHARED_MEM_NAME, ODOM_SEM_MUTEX_NAME, CONTROL_SHARED_MEM_NAME, CONTROL_SEM_MUTEX_NAME)
 
@@ -751,20 +724,19 @@ def mpc_loop():
 
     while True:
     
-        mpc.update_robot_pose_and_waypoints()
+        mpc.update_robot_pose_and_waypoints() #Always update odometry/waypoints to stay up-to-date with the mpc switch
         
         if mpc.mpc_switch == 1:
 
-            #DISABLE
+            # Get osbtacles and publish control if MPC is on
             mpc.update_obstacles()
-
             mpc.solve_mpc()
-
             mpc.publish_control(mpc.U_sol[:, 0:3])
 
             #time.sleep(0.02)
         else:  
-        
+            
+            # Send 0 control to stop robot while MPC is off
             mpc.U_sol = np.zeros((mpc.NU, mpc.N))
             mpc.publish_control(mpc.U_sol[:, 0:3])
             

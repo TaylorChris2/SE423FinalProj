@@ -1154,37 +1154,40 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         switch (RobotState) {
         case 1:
 
-            // vref and turn are the vref and turn returned from xy_control
-
+            // jcca: Reset control counter if new control data received from MPC
             if (flag_control == 1) {
                 control_count = 0;
                 flag_control = 0;
             }
 
-            if (control_count < dt_control) {
+            // jcca: Apply control based on time elpased
+            if (control_count < dt_control) { // jcca: Within first MPC timestep
                 vref = Vref1;
                 turn = Turnref1;
-            } else if (control_count < 2 * dt_control) {
+            } else if (control_count < 2 * dt_control) { // jcca: If new MPC data has not arrived within the first MPC dt
                 vref = Vref2;
                 turn = Turnref2;
-            } else {
+            } else { // jcca: Otherwise apply the second cached control value for longer than two MPC dt
                 vref = Vref3;
                 turn = Turnref3;
             }
+
+            // jcca: Calculate current distance from the robot to the waypoint
             robDist = sqrt(ROBOTps.x*ROBOTps.x + ROBOTps.y*ROBOTps.y);
             wayDist = sqrt(robotdest[statePos].x*robotdest[statePos].x + robotdest[statePos].y*robotdest[statePos].y);
             edist = abs(wayDist - robDist);
+            
             int mpcSwitch = 0;
-            if (edist < 0.3) {
+            if (edist < 0.3) { // jcca: MPC stop and switch waypoint condition
                 mpcSwitch = 0; 
-                RobotState = 30;
+                RobotState = 30; // jcca: Transition to waypoint changing state
             }
             else {
                 mpcSwitch = 1;
             }
-            DataToLabView.floatData[5] = mpcSwitch;
+            DataToLabView.floatData[5] = mpcSwitch; // jcca: Update MPC switch
 
-            control_count++;
+            control_count++; // jcca: Increment control counter each ~1ms iteration
             break;
         case 10:
             if (right_wall_follow_state == 1) {
