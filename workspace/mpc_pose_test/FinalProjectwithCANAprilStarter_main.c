@@ -1145,7 +1145,7 @@ __interrupt void SWI1_HighestPriority(void)     // EMIF_ERROR
         // States are:
 
         // 1: Navigate
-        // 10: Relocalize with wall follow?? - idk
+        // 10: Relocalize with wall follow - NOT USED
         // 20: April tag vision
         // 30: decide what waypoints to send
         // 40: decide when to use mpc
