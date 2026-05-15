@@ -241,8 +241,8 @@ def reconstruct_path(row_end, col_end, node_track):
 def filter_waypoints(path):
     if len(path) <= 2:
         return path
-
-    filtered = [path[0]] # always keep start
+    #filter through waypoints
+    filtered = [path[0]]
 
     for i in range(1, len(path) - 1):
         prev = path[i - 1]
@@ -254,11 +254,11 @@ def filter_waypoints(path):
 
         dr2 = nxt[0] - curr[0]
         dc2 = nxt[1] - curr[1]
-
+        #only if there has been a change in x or y direction append
         if dr1 != dr2 or dc1 != dc2:
             filtered.append(curr)
 
-    filtered.append(path[-1]) # always keep end
+    filtered.append(path[-1])
     return filtered
 
 def path_Astar(start_room, end_room):
