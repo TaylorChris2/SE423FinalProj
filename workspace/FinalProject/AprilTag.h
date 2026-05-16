@@ -17,18 +17,6 @@ extern uint16_t NewAprilRobotPose;
 
 void April_Init(void);
 
-void April_Make2DTransform(float T[3][3], float x, float y, float theta);
-
-void April_ComputeRobotPose2D(
-    float tagid,
-    float tagx,
-    float tagy,
-    float tagz,
-    float tagthetax,
-    float tagthetay,
-    float tagthetaz
-);
-
 void April_ComputeRobotPose2D_v2(
     float tagid,
     float tagx,
